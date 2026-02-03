@@ -96,6 +96,8 @@ class Team:
         """Set the captain."""
         if self.get_player(player_id) is None:
             raise ValueError(f"Player {player_id} not in squad")
+        if self.supersub_id == player_id:
+            raise ValueError("Supersub cannot also be captain")
         self.captain_id = player_id
 
     def set_supersub(self, player_id: str) -> None:

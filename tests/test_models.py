@@ -289,6 +289,15 @@ class TestTeam:
         with pytest.raises(ValueError, match="Captain cannot also be supersub"):
             team.set_supersub("p0")
 
+    def test_captain_cannot_be_supersub(self, sample_players: list[Player]) -> None:
+        """Test captain cannot be set to existing supersub."""
+        team = Team()
+        team.add_player(sample_players[0])
+        team.add_player(sample_players[1])
+        team.set_supersub("p0")
+        with pytest.raises(ValueError, match="Supersub cannot also be captain"):
+            team.set_captain("p0")
+
     def test_remove_player_clears_captain(self, sample_players: list[Player]) -> None:
         """Test removing captain clears captain_id."""
         team = Team()
