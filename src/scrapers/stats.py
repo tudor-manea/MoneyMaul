@@ -1,7 +1,7 @@
 """Scraper for match statistics from rugby stats providers."""
 
 import re
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -64,9 +64,9 @@ def parse_stat_value(value_str: str) -> int:
         match = re.search(r"(\d+)", value_str.strip())
         if match:
             return int(match.group(1))
-        return 0
-    except (ValueError, AttributeError):
         raise ParseError(f"Cannot parse stat value: {value_str}")
+    except (ValueError, AttributeError) as e:
+        raise ParseError(f"Cannot parse stat value: {value_str}") from e
 
 
 class StatsScraper(BaseScraper):
@@ -231,10 +231,15 @@ class StatsScraper(BaseScraper):
                 home_team = home_elem.get_text(strip=True)
                 away_team = away_elem.get_text(strip=True)
 
-                # Parse date
+                # Parse date - try common formats
                 date_str = date_elem.get_text(strip=True)
-                # Handle various date formats
-                match_date = date.today()  # Placeholder
+                match_date = date.today()
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d %b %Y", "%d %B %Y"):
+                    try:
+                        match_date = datetime.strptime(date_str, fmt).date()
+                        break
+                    except ValueError:
+                        continue
 
                 # Parse gameweek
                 gameweek = 1

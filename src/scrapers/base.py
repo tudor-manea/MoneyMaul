@@ -213,6 +213,14 @@ class BaseScraper(ABC):
         """
         count = 0
         for cache_file in self.cache_dir.glob("*.json"):
+            # Validate it's a cache entry before deletion
+            try:
+                with open(cache_file, "r") as f:
+                    entry = json.load(f)
+                if not all(k in entry for k in ("url", "timestamp", "data")):
+                    continue
+            except (json.JSONDecodeError, IOError):
+                continue
             cache_file.unlink()
             count += 1
         return count
