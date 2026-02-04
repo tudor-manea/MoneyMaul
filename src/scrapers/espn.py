@@ -52,7 +52,13 @@ def jersey_to_position(jersey: int) -> Position:
 
     Returns:
         Position enum (FORWARD or BACK).
+
+    Raises:
+        ValueError: If jersey number is not in valid range (1-23).
     """
+    if not isinstance(jersey, int) or jersey < 1 or jersey > 23:
+        raise ValueError(f"Invalid jersey number: {jersey}. Must be 1-23.")
+
     if jersey in FORWARD_JERSEYS:
         return Position.FORWARD
     if jersey in BACK_JERSEYS:
@@ -292,6 +298,10 @@ class ESPNScraper(BaseScraper):
                         # Parse individual stats
                         raw_stats = athlete_data.get("stats", {})
 
+                        # ESPN may provide player of match as "playerOfMatch" or similar
+                        # Defaults to False if not provided
+                        player_of_match = bool(raw_stats.get("playerOfMatch", False))
+
                         player_stats = PlayerMatchStats(
                             player_id=player_id,
                             match_id=match_id,
@@ -310,6 +320,7 @@ class ESPNScraper(BaseScraper):
                             penalties_conceded=self._safe_int(raw_stats.get("penaltiesConceded", 0)),
                             yellow_cards=self._safe_int(raw_stats.get("yellowCards", 0)),
                             red_cards=self._safe_int(raw_stats.get("redCards", 0)),
+                            player_of_match=player_of_match,
                         )
 
                         stats_list.append(player_stats)

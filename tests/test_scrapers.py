@@ -343,6 +343,21 @@ class TestJerseyToPosition:
         for jersey in range(21, 24):
             assert jersey_to_position(jersey) == Position.BACK
 
+    def test_invalid_jersey_zero_raises_error(self) -> None:
+        """Test that jersey 0 raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid jersey number"):
+            jersey_to_position(0)
+
+    def test_invalid_jersey_negative_raises_error(self) -> None:
+        """Test that negative jersey raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid jersey number"):
+            jersey_to_position(-1)
+
+    def test_invalid_jersey_too_high_raises_error(self) -> None:
+        """Test that jersey > 23 raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid jersey number"):
+            jersey_to_position(24)
+
 
 class TestESPNScraper:
     """Tests for ESPNScraper."""
