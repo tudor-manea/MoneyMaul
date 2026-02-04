@@ -8,6 +8,28 @@ from .calculator import (
     calculate_player_points,
     calculate_points,
 )
+from .fixtures import (
+    DifficultyRating,
+    FixtureDifficulty,
+    FixtureRecommendation,
+    TeamStrength,
+    calculate_fixture_difficulties,
+    calculate_team_strengths,
+    get_difficulty_rating,
+    get_favorable_captain_picks,
+    get_fixture_recommendations,
+    get_team_fixture_difficulty,
+)
+from .form import (
+    FormRecommendation,
+    FormTrend,
+    PlayerForm,
+    calculate_form_trend,
+    get_declining_players,
+    get_form_recommendations,
+    get_improving_players,
+    get_player_form,
+)
 from .recommender import (
     PlayerRecommendation,
     TransferRecommendation,
@@ -40,6 +62,26 @@ __all__ = [
     "calculate_multiplier",
     "calculate_player_points",
     "calculate_points",
+    # Fixtures
+    "DifficultyRating",
+    "FixtureDifficulty",
+    "FixtureRecommendation",
+    "TeamStrength",
+    "calculate_fixture_difficulties",
+    "calculate_team_strengths",
+    "get_difficulty_rating",
+    "get_favorable_captain_picks",
+    "get_fixture_recommendations",
+    "get_team_fixture_difficulty",
+    # Form
+    "FormRecommendation",
+    "FormTrend",
+    "PlayerForm",
+    "calculate_form_trend",
+    "get_declining_players",
+    "get_form_recommendations",
+    "get_improving_players",
+    "get_player_form",
     # Recommender
     "PlayerRecommendation",
     "TransferRecommendation",
