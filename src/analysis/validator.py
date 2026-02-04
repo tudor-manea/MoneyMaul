@@ -240,9 +240,9 @@ def get_max_player_value(team: Team) -> float:
         team: The current team.
 
     Returns:
-        Maximum star value that can be afforded.
+        Maximum star value that can be afforded (0 if over budget).
     """
-    return team.budget_remaining
+    return max(0.0, team.budget_remaining)
 
 
 def get_available_slots_for_country(team: Team, country: Country) -> int:
@@ -282,9 +282,9 @@ def get_transfer_budget(team: Team, player_out: Player) -> float:
         player_out: The player being transferred out.
 
     Returns:
-        Maximum star value for the incoming player.
+        Maximum star value for the incoming player (0 if still over budget).
     """
-    return team.budget_remaining + player_out.star_value
+    return max(0.0, team.budget_remaining + player_out.star_value)
 
 
 def find_affordable_transfers(
