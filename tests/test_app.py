@@ -2,6 +2,9 @@
 
 import pytest
 
+# Skip entire module if streamlit not installed (team_builder imports it at module level)
+pytest.importorskip("streamlit")
+
 from src.models import Country, Player, Position, Team
 from src.app.pages.team_builder import (
     _get_extended_players,
