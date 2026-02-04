@@ -300,6 +300,7 @@ def get_fixture_recommendations(
     matches: list[Match],
     gameweeks_ahead: int = 3,
     top_n: int = 10,
+    team_strengths: dict[Country, TeamStrength] | None = None,
 ) -> list[FixtureRecommendation]:
     """
     Recommend players with favorable upcoming fixtures.
@@ -309,6 +310,7 @@ def get_fixture_recommendations(
         matches: All matches.
         gameweeks_ahead: Number of upcoming gameweeks to consider.
         top_n: Number of recommendations to return.
+        team_strengths: Pre-calculated team strengths (will calculate if None).
 
     Returns:
         List of FixtureRecommendation sorted by favorable fixtures.
@@ -321,7 +323,7 @@ def get_fixture_recommendations(
             break
 
     # Calculate difficulties
-    difficulties = calculate_fixture_difficulties(matches)
+    difficulties = calculate_fixture_difficulties(matches, team_strengths)
 
     recommendations: list[FixtureRecommendation] = []
 
@@ -377,6 +379,7 @@ def get_favorable_captain_picks(
     player_points: dict[str, float],
     matches: list[Match],
     top_n: int = 5,
+    team_strengths: dict[Country, TeamStrength] | None = None,
 ) -> list[FixtureRecommendation]:
     """
     Recommend captain picks considering both form and fixture difficulty.
@@ -388,13 +391,15 @@ def get_favorable_captain_picks(
         player_points: Dict mapping player_id to their expected points.
         matches: All matches.
         top_n: Number of recommendations to return.
+        team_strengths: Pre-calculated team strengths (will calculate if None).
 
     Returns:
         List of FixtureRecommendation for captain selection.
     """
     # Get fixture recommendations (next gameweek only)
     fixture_recs = get_fixture_recommendations(
-        players, matches, gameweeks_ahead=1, top_n=len(players)
+        players, matches, gameweeks_ahead=1, top_n=len(players),
+        team_strengths=team_strengths
     )
 
     # Create lookup for fixture scores

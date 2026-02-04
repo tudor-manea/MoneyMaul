@@ -136,6 +136,7 @@ def load_all_players_from_csv(csv_path: Optional[Path] = None) -> list[Player]:
     """
     path = csv_path or PRICES_CSV_PATH
     players: list[Player] = []
+    seen_ids: set[str] = set()
 
     if not path.exists():
         return players
@@ -149,6 +150,9 @@ def load_all_players_from_csv(csv_path: Optional[Path] = None) -> list[Player]:
         "france": Country.FRANCE,
         "italy": Country.ITALY,
     }
+
+    # Use local RNG for ownership generation to avoid global state mutation
+    rng = random.Random(42)
 
     with open(path, "r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -169,14 +173,28 @@ def load_all_players_from_csv(csv_path: Optional[Path] = None) -> list[Player]:
             if country is None:
                 continue
 
-            position = Position.FORWARD if position_str == "forward" else Position.BACK
+            # Validate position explicitly - skip invalid rows
+            if position_str == "forward":
+                position = Position.FORWARD
+            elif position_str == "back":
+                position = Position.BACK
+            else:
+                continue
 
-            # Generate ID from name
-            player_id = name.lower().replace(" ", "-").replace(".", "")
+            # Generate unique ID with country prefix to avoid collisions
+            name_slug = name.lower().replace(" ", "-").replace(".", "")
+            base_id = f"{country.value.lower()}-{name_slug}"
+            player_id = base_id
+            if player_id in seen_ids:
+                suffix = 2
+                while f"{base_id}-{suffix}" in seen_ids:
+                    suffix += 1
+                player_id = f"{base_id}-{suffix}"
+            seen_ids.add(player_id)
 
             # Generate mock ownership based on price (higher price = higher ownership)
             base_ownership = (price / 16.0) * 30  # 16-star player ~= 30% ownership
-            ownership = min(max(base_ownership + random.uniform(-10, 15), 1.0), 80.0)
+            ownership = min(max(base_ownership + rng.uniform(-10, 15), 1.0), 80.0)
 
             players.append(
                 Player(
@@ -209,8 +227,8 @@ def generate_mock_player_points(
     Returns:
         Dictionary mapping player_id to expected points.
     """
-    if seed is not None:
-        random.seed(seed)
+    # Use local RNG to avoid global state mutation
+    rng = random.Random(seed)
 
     points: dict[str, float] = {}
 
@@ -221,10 +239,10 @@ def generate_mock_player_points(
         # Add position-based variance
         if player.position == Position.FORWARD:
             # Forwards have higher floor but lower ceiling
-            variance = random.uniform(-3, 8)
+            variance = rng.uniform(-3, 8)
         else:
             # Backs have more variance (boom/bust)
-            variance = random.uniform(-5, 15)
+            variance = rng.uniform(-5, 15)
 
         # Premium players (high price) tend to score more consistently
         consistency_bonus = (player.star_value - 10) * 0.5 if player.star_value > 10 else 0

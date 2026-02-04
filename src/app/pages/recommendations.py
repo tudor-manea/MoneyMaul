@@ -38,6 +38,8 @@ from src.scrapers import (
     ParseError,
     RateLimitError,
     load_all_players_from_csv,
+    apply_prices_to_players,
+    create_sample_players,
     generate_mock_player_points,
 )
 
@@ -58,18 +60,29 @@ def _init_session_state() -> None:
 
 def _get_players() -> list[Player]:
     """
-    Load all players from CSV prices file.
+    Load all players from CSV prices file with ESPN/sample fallback.
 
-    This gives us all 228 players with proper prices and mock ownership.
+    Falls back to ESPN API or sample data if CSV is not available.
     """
+    # Primary: Load all players from CSV (most complete data)
     players = load_all_players_from_csv()
     if players:
         st.session_state.data_source = "csv"
         return players
 
-    # Fallback - shouldn't happen if CSV exists
-    st.session_state.data_source = "error"
-    return []
+    # Fallback: ESPN API
+    try:
+        scraper = ESPNScraper()
+        espn_players = scraper.scrape_all_players(year=2026, use_cache=True)
+        if espn_players:
+            st.session_state.data_source = "espn"
+            return apply_prices_to_players(espn_players)
+    except (FetchError, ParseError, RateLimitError, ValueError):
+        pass
+
+    # Last resort: sample data
+    st.session_state.data_source = "sample"
+    return create_sample_players()
 
 
 def _get_matches() -> list:
@@ -174,7 +187,7 @@ def _get_historical_team_strengths() -> dict[Country, TeamStrength]:
     }
 
 
-def _render_player_recommendation(rec: PlayerRecommendation, show_add: bool = False) -> None:
+def _render_player_recommendation(rec: PlayerRecommendation) -> None:
     """Render a single player recommendation."""
     cols = st.columns([3, 1, 2])
 
@@ -433,8 +446,10 @@ def render() -> None:
                 st.subheader("🟢 Favorable Fixtures")
                 st.caption("Players with easy upcoming matches")
 
-                # Use historical strengths for recommendations if no results yet
-                fixture_recs = get_fixture_recommendations(players, matches, gameweeks_ahead=2, top_n=10)
+                # Pass computed/historical strengths for consistent recommendations
+                fixture_recs = get_fixture_recommendations(
+                    players, matches, gameweeks_ahead=2, top_n=10, team_strengths=strengths
+                )
                 if fixture_recs:
                     for rec in fixture_recs:
                         _render_fixture_recommendation(rec)
@@ -446,7 +461,9 @@ def render() -> None:
                 st.subheader("👑 Fixture-Aware Captain Picks")
                 st.caption("Best captain considering next fixture")
 
-                captain_fixture_recs = get_favorable_captain_picks(players, player_points, matches, top_n=10)
+                captain_fixture_recs = get_favorable_captain_picks(
+                    players, player_points, matches, top_n=10, team_strengths=strengths
+                )
                 if captain_fixture_recs:
                     for rec in captain_fixture_recs:
                         _render_fixture_recommendation(rec)
