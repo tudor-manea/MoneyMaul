@@ -194,7 +194,8 @@ def _add_player(player: Player) -> None:
     if result.is_valid:
         st.session_state.team.add_player(player)
     else:
-        st.error(f"Cannot add {player.name}: {result.errors[0].message}")
+        error_msg = result.errors[0].message if result.errors else "Unknown error"
+        st.error(f"Cannot add {player.name}: {error_msg}")
 
 
 def _remove_player(player_id: str) -> None:
