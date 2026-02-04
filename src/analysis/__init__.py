@@ -8,6 +8,17 @@ from .calculator import (
     calculate_player_points,
     calculate_points,
 )
+from .recommender import (
+    PlayerRecommendation,
+    TransferRecommendation,
+    calculate_points_per_star,
+    get_captain_recommendations,
+    get_differential_picks,
+    get_supersub_recommendations,
+    get_transfer_out_candidates,
+    get_transfer_suggestions,
+    get_value_picks,
+)
 from .validator import (
     ValidationResult,
     can_add_player,
@@ -29,6 +40,16 @@ __all__ = [
     "calculate_multiplier",
     "calculate_player_points",
     "calculate_points",
+    # Recommender
+    "PlayerRecommendation",
+    "TransferRecommendation",
+    "calculate_points_per_star",
+    "get_captain_recommendations",
+    "get_differential_picks",
+    "get_supersub_recommendations",
+    "get_transfer_out_candidates",
+    "get_transfer_suggestions",
+    "get_value_picks",
     # Validator
     "ValidationResult",
     "can_add_player",
