@@ -275,7 +275,7 @@ def render() -> None:
         else:
             st.warning("No team selected. Build your team first for personalized recommendations.")
     with col2:
-        st.button("Refresh Data", on_click=_refresh_data)
+        st.button("Refresh Data", on_click=_refresh_data, key="recommendations_refresh")
 
     st.divider()
 

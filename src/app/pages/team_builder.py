@@ -309,7 +309,7 @@ def render() -> None:
         else:
             st.info("Loading player data...")
     with col2:
-        st.button("Refresh Data", on_click=_refresh_players)
+        st.button("Refresh Data", on_click=_refresh_players, key="team_builder_refresh")
 
     st.divider()
 
