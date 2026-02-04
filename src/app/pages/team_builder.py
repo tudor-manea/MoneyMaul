@@ -304,7 +304,7 @@ def _render_team_player_row(player: Player) -> None:
     """Render a player row in the team section."""
     team = st.session_state.team
 
-    cols = st.columns([3, 1, 1, 1, 1])
+    cols = st.columns([3, 1, 1, 1])
 
     # Player info
     with cols[0]:

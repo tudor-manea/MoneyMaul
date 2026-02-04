@@ -157,11 +157,13 @@ class TestAppImports:
 
     def test_team_builder_import(self) -> None:
         """Should be able to import team builder page."""
+        pytest.importorskip("streamlit")
         from src.app.pages import team_builder
         assert hasattr(team_builder, "render")
 
     def test_components_import(self) -> None:
         """Should be able to import components."""
+        pytest.importorskip("streamlit")
         from src.app.components import (
             render_player_table,
             render_team_status,
