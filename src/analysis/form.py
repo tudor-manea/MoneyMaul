@@ -124,14 +124,22 @@ def get_player_form(
     # Create match lookup for ordering
     match_lookup = {m.id: m for m in matches}
 
+    # Filter out stats with missing match metadata to avoid stale ordering
+    player_stats = [s for s in player_stats if s.match_id in match_lookup]
+    if not player_stats:
+        return PlayerForm(
+            player_id=player.id,
+            matches_played=0,
+            total_points=0.0,
+            average_points=0.0,
+            trend=FormTrend.STABLE,
+            recent_points=[],
+        )
+
     # Sort by match date/gameweek (most recent first)
     player_stats_sorted = sorted(
         player_stats,
-        key=lambda s: (
-            match_lookup[s.match_id].gameweek
-            if s.match_id in match_lookup
-            else 0
-        ),
+        key=lambda s: match_lookup[s.match_id].gameweek,
         reverse=True,
     )
 

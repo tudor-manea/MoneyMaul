@@ -151,7 +151,7 @@ def calculate_team_strengths(
     total_matches = sum(s["matches_played"] for s in stats.values())
     if total_matches == 0:
         # No matches played, return default 50 strength for all teams
-        for country, s in stats.items():
+        for country in stats:
             strengths[country] = TeamStrength(
                 country=country,
                 matches_played=0,
@@ -418,7 +418,7 @@ def get_favorable_captain_picks(
                 upcoming_difficulty=fixture_rec.upcoming_difficulty,
                 fixture_details=fixture_rec.fixture_details,
                 score=combined_score,
-                reason=f"{base_points:.1f} pts × {fixture_multiplier:.2f} fixture bonus = {combined_score:.1f}",
+                reason=f"{base_points:.1f} pts x {fixture_multiplier:.2f} fixture bonus = {combined_score:.1f}",
             )
         )
 

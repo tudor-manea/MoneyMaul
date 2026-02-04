@@ -298,7 +298,7 @@ class TestGetTeamFixtureDifficulty:
         )
 
         assert len(ireland_fixtures) > 0
-        for match, diff in ireland_fixtures:
+        for match, _ in ireland_fixtures:
             assert match.home_team == "Ireland" or match.away_team == "Ireland"
 
     def test_upcoming_only_filters_completed(
