@@ -273,7 +273,7 @@ def render() -> None:
                 "Max Price",
                 min_value=8.0,
                 max_value=20.0,
-                value=min(float(st.session_state.team.budget_remaining), 20.0),
+                value=max(8.0, min(float(st.session_state.team.budget_remaining), 20.0)),
                 step=0.5,
                 key="max_price_filter",
             )
