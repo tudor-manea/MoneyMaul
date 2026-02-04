@@ -117,6 +117,8 @@ class ESPNScraper(BaseScraper):
         matches = []
         events = data.get("events", [])
 
+        # Parse all matches first
+        parsed_matches = []
         for event in events:
             try:
                 match_id = event.get("id", "")
@@ -152,53 +154,38 @@ class ESPNScraper(BaseScraper):
                 if not home_team or not away_team:
                     continue
 
-                # Determine gameweek from date
-                gameweek = self._date_to_gameweek(match_date)
-
-                matches.append(
-                    Match(
-                        id=match_id,
-                        home_team=home_team,
-                        away_team=away_team,
-                        match_date=match_date,
-                        gameweek=gameweek,
-                        home_score=home_score,
-                        away_score=away_score,
-                    )
-                )
+                parsed_matches.append({
+                    "id": match_id,
+                    "home_team": home_team,
+                    "away_team": away_team,
+                    "match_date": match_date,
+                    "home_score": home_score,
+                    "away_score": away_score,
+                })
 
             except (KeyError, ValueError, TypeError):
                 continue
 
+        # Sort by date and assign gameweeks (3 matches per gameweek)
+        parsed_matches.sort(key=lambda m: m["match_date"])
+
+        for i, match_data in enumerate(parsed_matches):
+            # Six Nations has 3 matches per gameweek
+            gameweek = min((i // 3) + 1, 5)
+
+            matches.append(
+                Match(
+                    id=match_data["id"],
+                    home_team=match_data["home_team"],
+                    away_team=match_data["away_team"],
+                    match_date=match_data["match_date"],
+                    gameweek=gameweek,
+                    home_score=match_data["home_score"],
+                    away_score=match_data["away_score"],
+                )
+            )
+
         return matches
-
-    def _date_to_gameweek(self, match_date: date) -> int:
-        """
-        Determine gameweek from match date.
-
-        2026 Six Nations schedule (approximate):
-        - GW1: Feb 1
-        - GW2: Feb 8
-        - GW3: Feb 22
-        - GW4: Mar 8
-        - GW5: Mar 15
-        """
-        month = match_date.month
-        day = match_date.day
-
-        if month == 2:
-            if day <= 2:
-                return 1
-            elif day <= 9:
-                return 2
-            else:
-                return 3
-        elif month == 3:
-            if day <= 9:
-                return 4
-            else:
-                return 5
-        return 1
 
     def scrape_match_roster(
         self, match_id: str, use_cache: bool = True

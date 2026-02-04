@@ -548,20 +548,40 @@ class TestESPNScraper:
 
             assert fixtures == []
 
-    def test_date_to_gameweek_mapping(self) -> None:
-        """Test gameweek determination from date."""
-        from datetime import date
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_gameweek_assignment_by_match_order(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test that gameweeks are assigned based on match order (3 per GW)."""
+        # Create 6 mock events (2 gameweeks worth) with proper date format
+        mock_fetch_json.return_value = {
+            "events": [
+                {
+                    "id": str(i),
+                    "date": f"2026-02-{5 + i:02d}T15:00Z",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {"team": {"displayName": f"Team{i}A"}, "homeAway": "home", "score": None},
+                                {"team": {"displayName": f"Team{i}B"}, "homeAway": "away", "score": None},
+                            ]
+                        }
+                    ],
+                }
+                for i in range(6)
+            ]
+        }
 
         with tempfile.TemporaryDirectory() as tmpdir:
             scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            fixtures = scraper.scrape_fixtures()
 
-            # GW1: Early Feb
-            assert scraper._date_to_gameweek(date(2026, 2, 1)) == 1
-            # GW2: Mid Feb
-            assert scraper._date_to_gameweek(date(2026, 2, 8)) == 2
-            # GW3: Late Feb
-            assert scraper._date_to_gameweek(date(2026, 2, 22)) == 3
-            # GW4: Early Mar
-            assert scraper._date_to_gameweek(date(2026, 3, 8)) == 4
-            # GW5: Mid Mar
-            assert scraper._date_to_gameweek(date(2026, 3, 15)) == 5
+            assert len(fixtures) == 6
+            # First 3 matches should be GW1
+            assert fixtures[0].gameweek == 1
+            assert fixtures[1].gameweek == 1
+            assert fixtures[2].gameweek == 1
+            # Next 3 should be GW2
+            assert fixtures[3].gameweek == 2
+            assert fixtures[4].gameweek == 2
+            assert fixtures[5].gameweek == 2
