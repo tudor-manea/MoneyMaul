@@ -151,6 +151,7 @@ class TestAppImports:
 
     def test_main_import(self) -> None:
         """Should be able to import main module."""
+        pytest.importorskip("streamlit")
         from src.app import main
         assert callable(main)
 

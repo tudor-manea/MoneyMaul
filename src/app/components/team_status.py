@@ -54,7 +54,7 @@ def render_team_status(team: Team) -> None:
         for country in Country:
             count = country_counts.get(country, 0)
             slots = get_available_slots_for_country(team, country)
-            bar_pct = count / MAX_PER_COUNTRY
+            bar_pct = min(count / MAX_PER_COUNTRY, 1.0)
 
             col1, col2 = st.columns([3, 1])
             with col1:
