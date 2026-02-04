@@ -410,11 +410,11 @@ def render() -> None:
 
             # Determine which strengths to use
             computed_strengths = calculate_team_strengths(matches)
-            # Check if any matches have been played (total across all teams)
-            total_matches_played = sum(s.matches_played for s in computed_strengths.values())
-            has_results = total_matches_played > 0
+            # Check if actual points were scored (not just 0-0 matches marked complete)
+            total_points_scored = sum(s.points_for for s in computed_strengths.values())
+            has_real_results = total_points_scored > 0
 
-            if has_results:
+            if has_real_results:
                 strengths = computed_strengths
                 strength_source = "2026 Results"
             else:

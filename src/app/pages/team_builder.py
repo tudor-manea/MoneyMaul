@@ -12,6 +12,7 @@ import streamlit as st
 
 from src.models import Country, Player, Position, Team, MAX_BUDGET, MAX_PER_COUNTRY
 from src.analysis import (
+    auto_select_team,
     can_add_player,
     validate_team,
     get_available_slots_for_country,
@@ -24,6 +25,7 @@ from src.scrapers import (
     RateLimitError,
     apply_prices_to_players,
     create_sample_players,
+    generate_mock_player_points,
     load_all_players_from_csv,
 )
 from src.app.components import render_player_table, render_team_status, render_validation
@@ -290,6 +292,15 @@ def _refresh_players() -> None:
     st.session_state.players = _get_players()
 
 
+def _auto_select_team() -> None:
+    """Auto-select optimal team using greedy algorithm."""
+    players = st.session_state.players
+    # Generate expected points for all players
+    player_points = generate_mock_player_points(players, seed=42)
+    # Select optimal team
+    st.session_state.team = auto_select_team(players, player_points)
+
+
 def render() -> None:
     """Render the team builder page."""
     _init_session_state()
@@ -319,6 +330,15 @@ def render() -> None:
     with team_col:
         st.header("Your Team")
         render_team_status(st.session_state.team)
+
+        # Auto-select button
+        st.button(
+            "Auto-Select Best Team",
+            on_click=_auto_select_team,
+            key="auto_select_btn",
+            type="primary",
+            help="Automatically pick the optimal 15 players within budget and country constraints"
+        )
 
         st.subheader("Squad")
         if st.session_state.team.players:

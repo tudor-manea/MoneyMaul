@@ -323,3 +323,65 @@ def find_affordable_transfers(
         valid_candidates.append(candidate)
 
     return valid_candidates
+
+
+def auto_select_team(
+    players: list[Player],
+    player_points: dict[str, float],
+) -> Team:
+    """
+    Automatically select the optimal team within budget/country constraints.
+
+    Uses a greedy algorithm: sorts players by points-per-star ratio and
+    picks the best players that fit within constraints.
+
+    Args:
+        players: All available players.
+        player_points: Dict mapping player_id to expected points.
+
+    Returns:
+        Team with optimal 15 players selected.
+    """
+    # Calculate value (points per star) for each player
+    player_values: list[tuple[Player, float]] = []
+    for player in players:
+        points = player_points.get(player.id, 0.0)
+        if points > 0 and player.star_value > 0:
+            value = points / player.star_value
+            player_values.append((player, value))
+
+    # Sort by value (highest first)
+    player_values.sort(key=lambda x: x[1], reverse=True)
+
+    team = Team()
+    country_counts: dict[Country, int] = {c: 0 for c in Country}
+
+    for player, _ in player_values:
+        # Stop when we have 15 players
+        if team.squad_size >= MIN_SQUAD_SIZE:
+            break
+
+        # Check budget constraint
+        if team.total_value + player.star_value > MAX_BUDGET:
+            continue
+
+        # Check country constraint
+        if country_counts[player.country] >= MAX_PER_COUNTRY:
+            continue
+
+        # Add player
+        team.add_player(player)
+        country_counts[player.country] += 1
+
+    # Set captain as highest expected points player
+    if team.players:
+        best_captain = max(team.players, key=lambda p: player_points.get(p.id, 0.0))
+        team.captain_id = best_captain.id
+
+        # Set supersub as second highest (excluding captain)
+        remaining = [p for p in team.players if p.id != best_captain.id]
+        if remaining:
+            best_supersub = max(remaining, key=lambda p: player_points.get(p.id, 0.0))
+            team.supersub_id = best_supersub.id
+
+    return team

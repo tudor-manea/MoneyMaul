@@ -43,6 +43,7 @@ from .recommender import (
 )
 from .validator import (
     ValidationResult,
+    auto_select_team,
     can_add_player,
     can_make_transfer,
     can_remove_player,
@@ -94,6 +95,7 @@ __all__ = [
     "get_value_picks",
     # Validator
     "ValidationResult",
+    "auto_select_team",
     "can_add_player",
     "can_make_transfer",
     "can_remove_player",
