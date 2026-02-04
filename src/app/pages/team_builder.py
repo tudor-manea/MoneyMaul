@@ -9,7 +9,7 @@ from ...analysis import (
     get_available_slots_for_country,
     get_squad_slots_remaining,
 )
-from ...scrapers import ESPNScraper, create_sample_players
+from ...scrapers import ESPNScraper, FetchError, ParseError, RateLimitError, create_sample_players
 from ..components import render_player_table, render_team_status, render_validation
 
 
@@ -39,8 +39,8 @@ def _get_players() -> list[Player]:
     """
     try:
         return _fetch_espn_players()
-    except Exception:
-        # Fall back to sample data
+    except (FetchError, ParseError, RateLimitError, ValueError):
+        # Fall back to sample data if ESPN API fails
         st.session_state.data_source = "sample"
         return _get_sample_players()
 
