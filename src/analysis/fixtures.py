@@ -170,12 +170,16 @@ def calculate_team_strengths(
     min_diff = min(
         (s["points_for"] - s["points_against"]) for s in stats.values()
     )
-    diff_range = max_diff - min_diff if max_diff != min_diff else 1
+    diff_range = max_diff - min_diff
 
     for country, s in stats.items():
         point_diff = s["points_for"] - s["points_against"]
-        # Normalize to 0-100 scale
-        strength_score = ((point_diff - min_diff) / diff_range) * 100 if diff_range > 0 else 50.0
+        # Normalize to 0-100 scale (50.0 if all teams have equal differential)
+        strength_score = (
+            50.0
+            if diff_range == 0
+            else ((point_diff - min_diff) / diff_range) * 100
+        )
 
         strengths[country] = TeamStrength(
             country=country,
