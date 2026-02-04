@@ -1,23 +1,32 @@
 """Team builder page for selecting and managing fantasy team."""
 
+import sys
+from pathlib import Path
+
+# Ensure project root is in path for direct page execution
+_project_root = Path(__file__).parent.parent.parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 import streamlit as st
 
-from ...models import Country, Player, Position, Team, MAX_BUDGET, MAX_PER_COUNTRY
-from ...analysis import (
+from src.models import Country, Player, Position, Team, MAX_BUDGET, MAX_PER_COUNTRY
+from src.analysis import (
     can_add_player,
     validate_team,
     get_available_slots_for_country,
     get_squad_slots_remaining,
 )
-from ...scrapers import (
+from src.scrapers import (
     ESPNScraper,
     FetchError,
     ParseError,
     RateLimitError,
     apply_prices_to_players,
     create_sample_players,
+    load_all_players_from_csv,
 )
-from ..components import render_player_table, render_team_status, render_validation
+from src.app.components import render_player_table, render_team_status, render_validation
 
 
 def _init_session_state() -> None:
@@ -32,15 +41,24 @@ def _init_session_state() -> None:
 
 def _get_players() -> list[Player]:
     """
-    Get players from ESPN API with fallback to sample data.
+    Get players from CSV prices file (all 228 players).
+
+    Falls back to ESPN API or sample data if CSV is not available.
 
     Returns:
         List of Player objects.
     """
+    # Primary: Load all players from CSV (most complete data)
+    csv_players = load_all_players_from_csv()
+    if csv_players:
+        st.session_state.data_source = "csv"
+        return csv_players
+
+    # Fallback: ESPN API
     try:
         return _fetch_espn_players()
     except (FetchError, ParseError, RateLimitError, ValueError):
-        # Fall back to sample data if ESPN API fails
+        # Last resort: sample data
         st.session_state.data_source = "sample"
         return _get_sample_players()
 
@@ -282,10 +300,12 @@ def render() -> None:
     source = st.session_state.get("data_source", "unknown")
     col1, col2 = st.columns([3, 1])
     with col1:
-        if source == "espn":
-            st.success(f"Using live ESPN data ({len(st.session_state.players)} players)")
+        if source == "csv":
+            st.success(f"Using player database ({len(st.session_state.players)} players)")
+        elif source == "espn":
+            st.success(f"Using ESPN data ({len(st.session_state.players)} players)")
         elif source == "sample":
-            st.warning("Using sample data (ESPN API unavailable)")
+            st.warning("Using sample data (data unavailable)")
         else:
             st.info("Loading player data...")
     with col2:
@@ -422,3 +442,7 @@ def _filter_players(
 
     # Sort by star value (descending)
     return sorted(filtered, key=lambda p: p.star_value, reverse=True)
+
+
+# Run the page when loaded by Streamlit
+render()
