@@ -1,8 +1,16 @@
 """Main Streamlit application entry point."""
 
+import sys
+from pathlib import Path
+
+# Add project root to path for direct execution
+_project_root = Path(__file__).parent.parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 import streamlit as st
 
-from .pages import team_builder
+from src.app.pages import team_builder
 
 # Navigation
 PAGES = {
