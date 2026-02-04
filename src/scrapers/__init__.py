@@ -8,6 +8,12 @@ from .base import (
     ScraperError,
     CACHE_DIR,
 )
+from .espn import (
+    ESPNScraper,
+    ESPN_API_BASE,
+    ESPN_TEAM_MAP,
+    jersey_to_position,
+)
 from .fantasy import (
     FantasyScraper,
     create_sample_players,
@@ -30,6 +36,11 @@ __all__ = [
     "RateLimitError",
     "ScraperError",
     "CACHE_DIR",
+    # ESPN
+    "ESPNScraper",
+    "ESPN_API_BASE",
+    "ESPN_TEAM_MAP",
+    "jersey_to_position",
     # Fantasy
     "FantasyScraper",
     "create_sample_players",

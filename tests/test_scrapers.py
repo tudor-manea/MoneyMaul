@@ -11,6 +11,7 @@ import pytest
 from src.models import Country, Position, SelectionStatus
 from src.scrapers import (
     BaseScraper,
+    ESPNScraper,
     FetchError,
     ParseError,
     RateLimitError,
@@ -19,6 +20,7 @@ from src.scrapers import (
     create_sample_match,
     create_sample_players,
     create_sample_stats,
+    jersey_to_position,
     parse_country,
     parse_position,
 )
@@ -316,3 +318,270 @@ class TestStatsScraper:
             matches = scraper.scrape_fixtures()
 
             assert matches == []
+
+
+class TestJerseyToPosition:
+    """Tests for jersey_to_position function."""
+
+    def test_forward_jerseys(self) -> None:
+        """Test that jerseys 1-8 return FORWARD."""
+        for jersey in range(1, 9):
+            assert jersey_to_position(jersey) == Position.FORWARD
+
+    def test_back_jerseys(self) -> None:
+        """Test that jerseys 9-15 return BACK."""
+        for jersey in range(9, 16):
+            assert jersey_to_position(jersey) == Position.BACK
+
+    def test_bench_forwards(self) -> None:
+        """Test that bench jerseys 16-20 return FORWARD."""
+        for jersey in range(16, 21):
+            assert jersey_to_position(jersey) == Position.FORWARD
+
+    def test_bench_backs(self) -> None:
+        """Test that bench jerseys 21-23 return BACK."""
+        for jersey in range(21, 24):
+            assert jersey_to_position(jersey) == Position.BACK
+
+    def test_invalid_jersey_zero_raises_error(self) -> None:
+        """Test that jersey 0 raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid jersey number"):
+            jersey_to_position(0)
+
+    def test_invalid_jersey_negative_raises_error(self) -> None:
+        """Test that negative jersey raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid jersey number"):
+            jersey_to_position(-1)
+
+    def test_invalid_jersey_too_high_raises_error(self) -> None:
+        """Test that jersey > 23 raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid jersey number"):
+            jersey_to_position(24)
+
+
+class TestESPNScraper:
+    """Tests for ESPNScraper."""
+
+    def test_initialization(self) -> None:
+        """Test scraper initialization."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+
+            assert scraper.base_url
+            assert scraper.cache_dir == Path(tmpdir)
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_fixtures_parses_events(self, mock_fetch_json: MagicMock) -> None:
+        """Test that fixtures are parsed from ESPN scoreboard response."""
+        mock_fetch_json.return_value = {
+            "events": [
+                {
+                    "id": "602502",
+                    "date": "2026-02-01T15:15Z",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {
+                                    "team": {"displayName": "France"},
+                                    "homeAway": "home",
+                                    "score": "32",
+                                },
+                                {
+                                    "team": {"displayName": "Ireland"},
+                                    "homeAway": "away",
+                                    "score": "19",
+                                },
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            fixtures = scraper.scrape_fixtures()
+
+            assert len(fixtures) == 1
+            assert fixtures[0].id == "602502"
+            assert fixtures[0].home_team == "France"
+            assert fixtures[0].away_team == "Ireland"
+            assert fixtures[0].home_score == 32
+            assert fixtures[0].away_score == 19
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_fixtures_handles_scheduled_match(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test that scheduled matches (no score) are handled."""
+        mock_fetch_json.return_value = {
+            "events": [
+                {
+                    "id": "602516",
+                    "date": "2026-03-15T17:00Z",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {
+                                    "team": {"displayName": "France"},
+                                    "homeAway": "home",
+                                    "score": None,
+                                },
+                                {
+                                    "team": {"displayName": "England"},
+                                    "homeAway": "away",
+                                    "score": None,
+                                },
+                            ]
+                        }
+                    ],
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            fixtures = scraper.scrape_fixtures()
+
+            assert len(fixtures) == 1
+            assert fixtures[0].home_score is None
+            assert fixtures[0].away_score is None
+            assert not fixtures[0].is_completed
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_match_roster_parses_players(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test that player rosters are parsed from match summary."""
+        mock_fetch_json.return_value = {
+            "rosters": [
+                {
+                    "team": {"id": "9"},  # France
+                    "roster": [
+                        {
+                            "athlete": {
+                                "id": "12345",
+                                "displayName": "Antoine Dupont",
+                            },
+                            "jersey": "9",
+                        },
+                        {
+                            "athlete": {
+                                "id": "12346",
+                                "displayName": "Gregory Alldritt",
+                            },
+                            "jersey": "8",
+                        },
+                    ],
+                }
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            roster = scraper.scrape_match_roster("602502")
+
+            assert len(roster) == 2
+            # Dupont is a scrum-half (9) - BACK
+            dupont = next(p for p in roster if "Dupont" in p.name)
+            assert dupont.country == Country.FRANCE
+            assert dupont.position == Position.BACK
+            # Alldritt is a No.8 - FORWARD
+            alldritt = next(p for p in roster if "Alldritt" in p.name)
+            assert alldritt.position == Position.FORWARD
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_match_stats_parses_statistics(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test that player statistics are parsed from match summary."""
+        mock_fetch_json.return_value = {
+            "boxscore": {
+                "players": [
+                    {
+                        "statistics": [
+                            {
+                                "athletes": [
+                                    {
+                                        "athlete": {"id": "12345"},
+                                        "starter": True,
+                                        "stats": {
+                                            "tries": 2,
+                                            "tryAssists": 1,
+                                            "metresRun": 75,
+                                            "tackles": 8,
+                                            "turnoversWon": 1,
+                                        },
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            stats = scraper.scrape_match_stats("602502")
+
+            assert len(stats) == 1
+            assert stats[0].player_id == "espn-12345"
+            assert stats[0].match_id == "602502"
+            assert stats[0].selection_status == SelectionStatus.STARTER
+            assert stats[0].tries == 2
+            assert stats[0].try_assists == 1
+            assert stats[0].metres_carried == 75
+            assert stats[0].tackles == 8
+            assert stats[0].breakdown_steals == 1
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_returns_empty_for_malformed_data(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test that scraping handles malformed data gracefully."""
+        mock_fetch_json.return_value = {"events": []}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            fixtures = scraper.scrape_fixtures()
+
+            assert fixtures == []
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_gameweek_assignment_by_match_order(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test that gameweeks are assigned based on match order (3 per GW)."""
+        # Create 6 mock events (2 gameweeks worth) with proper date format
+        mock_fetch_json.return_value = {
+            "events": [
+                {
+                    "id": str(i),
+                    "date": f"2026-02-{5 + i:02d}T15:00Z",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {"team": {"displayName": f"Team{i}A"}, "homeAway": "home", "score": None},
+                                {"team": {"displayName": f"Team{i}B"}, "homeAway": "away", "score": None},
+                            ]
+                        }
+                    ],
+                }
+                for i in range(6)
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            fixtures = scraper.scrape_fixtures()
+
+            assert len(fixtures) == 6
+            # First 3 matches should be GW1
+            assert fixtures[0].gameweek == 1
+            assert fixtures[1].gameweek == 1
+            assert fixtures[2].gameweek == 1
+            # Next 3 should be GW2
+            assert fixtures[3].gameweek == 2
+            assert fixtures[4].gameweek == 2
+            assert fixtures[5].gameweek == 2

@@ -9,8 +9,15 @@ from ...analysis import (
     get_available_slots_for_country,
     get_squad_slots_remaining,
 )
-from ...scrapers import create_sample_players
+from ...scrapers import ESPNScraper, FetchError, ParseError, RateLimitError, create_sample_players
 from ..components import render_player_table, render_team_status, render_validation
+
+
+# Default prices by position (used when fantasy site prices unavailable)
+DEFAULT_PRICES = {
+    Position.FORWARD: 12.0,
+    Position.BACK: 13.0,
+}
 
 
 def _init_session_state() -> None:
@@ -18,11 +25,50 @@ def _init_session_state() -> None:
     if "team" not in st.session_state:
         st.session_state.team = Team()
     if "players" not in st.session_state:
-        st.session_state.players = _get_extended_players()
+        st.session_state.players = _get_players()
+    if "data_source" not in st.session_state:
+        st.session_state.data_source = "unknown"
 
 
-def _get_extended_players() -> list[Player]:
-    """Get extended sample player list for testing."""
+def _get_players() -> list[Player]:
+    """
+    Get players from ESPN API with fallback to sample data.
+
+    Returns:
+        List of Player objects.
+    """
+    try:
+        return _fetch_espn_players()
+    except (FetchError, ParseError, RateLimitError, ValueError):
+        # Fall back to sample data if ESPN API fails
+        st.session_state.data_source = "sample"
+        return _get_sample_players()
+
+
+def _fetch_espn_players() -> list[Player]:
+    """
+    Fetch real players from ESPN API.
+
+    Returns:
+        List of Player objects with estimated prices.
+    """
+    scraper = ESPNScraper()
+    espn_players = scraper.scrape_all_players(year=2026, use_cache=True)
+
+    if not espn_players:
+        raise ValueError("No players found from ESPN API")
+
+    # Assign estimated prices (will be updated when fantasy site is available)
+    for player in espn_players:
+        # Use position-based default pricing
+        player.star_value = DEFAULT_PRICES.get(player.position, 12.0)
+
+    st.session_state.data_source = "espn"
+    return espn_players
+
+
+def _get_sample_players() -> list[Player]:
+    """Get sample player list for testing/fallback."""
     base_players = create_sample_players()
 
     # Add more players to enable full team building
@@ -223,11 +269,31 @@ def _clear_supersub() -> None:
     st.session_state.team.supersub_id = None
 
 
+def _refresh_players() -> None:
+    """Refresh player data from ESPN API."""
+    st.session_state.players = _get_players()
+
+
 def render() -> None:
     """Render the team builder page."""
     _init_session_state()
 
     st.title("Team Builder")
+
+    # Data source indicator
+    source = st.session_state.get("data_source", "unknown")
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        if source == "espn":
+            st.success(f"Using live ESPN data ({len(st.session_state.players)} players)")
+        elif source == "sample":
+            st.warning("Using sample data (ESPN API unavailable)")
+        else:
+            st.info("Loading player data...")
+    with col2:
+        st.button("Refresh Data", on_click=_refresh_players)
+
+    st.divider()
 
     # Layout: Two columns - team on left, available players on right
     team_col, players_col = st.columns([1, 1.5])

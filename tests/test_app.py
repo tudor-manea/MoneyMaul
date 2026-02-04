@@ -7,23 +7,23 @@ pytest.importorskip("streamlit")
 
 from src.models import Country, Player, Position, Team
 from src.app.pages.team_builder import (
-    _get_extended_players,
+    _get_sample_players,
     _filter_players,
 )
 
 
 class TestExtendedPlayers:
-    """Tests for extended player data."""
+    """Tests for sample player data (fallback)."""
 
     def test_returns_list(self) -> None:
         """Should return a list of players."""
-        players = _get_extended_players()
+        players = _get_sample_players()
         assert isinstance(players, list)
         assert len(players) > 0
 
     def test_all_players_valid(self) -> None:
         """All players should be valid Player objects."""
-        players = _get_extended_players()
+        players = _get_sample_players()
         for player in players:
             assert isinstance(player, Player)
             assert isinstance(player.country, Country)
@@ -32,32 +32,32 @@ class TestExtendedPlayers:
 
     def test_has_players_from_all_countries(self) -> None:
         """Should have players from all six nations."""
-        players = _get_extended_players()
+        players = _get_sample_players()
         countries = {p.country for p in players}
         assert countries == set(Country)
 
     def test_has_forwards_and_backs(self) -> None:
         """Should have both forwards and backs."""
-        players = _get_extended_players()
+        players = _get_sample_players()
         positions = {p.position for p in players}
         assert Position.FORWARD in positions
         assert Position.BACK in positions
 
     def test_unique_player_ids(self) -> None:
         """All player IDs should be unique."""
-        players = _get_extended_players()
+        players = _get_sample_players()
         ids = [p.id for p in players]
         assert len(ids) == len(set(ids))
 
     def test_enough_players_for_full_squad(self) -> None:
         """Should have enough players to build a full 15-16 player squad."""
-        players = _get_extended_players()
+        players = _get_sample_players()
         # Need at least 15 players total
         assert len(players) >= 15
 
     def test_can_afford_15_players(self) -> None:
         """Should be able to afford at least 15 players within budget."""
-        players = _get_extended_players()
+        players = _get_sample_players()
         # Sort by value and take cheapest 15
         sorted_players = sorted(players, key=lambda p: p.star_value)
         cheapest_15_value = sum(p.star_value for p in sorted_players[:15])
