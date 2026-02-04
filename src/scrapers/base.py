@@ -192,6 +192,54 @@ class BaseScraper(ABC):
 
         return content
 
+    def fetch_json(self, url: str, use_cache: bool = True) -> dict:
+        """
+        Fetch JSON data from URL with caching and rate limiting.
+
+        Args:
+            url: The URL to fetch.
+            use_cache: Whether to use cached data if available.
+
+        Returns:
+            Parsed JSON data as dictionary.
+
+        Raises:
+            FetchError: If the request fails.
+            ParseError: If JSON parsing fails.
+        """
+        # Check cache first
+        if use_cache:
+            cached = self._read_cache(url)
+            if cached is not None:
+                # Cache stores parsed JSON directly
+                return cached
+
+        # Apply rate limiting
+        self._rate_limit()
+
+        try:
+            response = self._session.get(url, timeout=30)
+            response.raise_for_status()
+        except requests.exceptions.Timeout:
+            raise FetchError(f"Request timed out: {url}")
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                raise RateLimitError(f"Rate limited: {url}")
+            raise FetchError(f"HTTP error {e.response.status_code}: {url}")
+        except requests.exceptions.RequestException as e:
+            raise FetchError(f"Request failed: {url} - {e}")
+
+        try:
+            data = response.json()
+        except json.JSONDecodeError as e:
+            raise ParseError(f"Invalid JSON response from {url}: {e}")
+
+        # Cache the parsed JSON
+        if use_cache:
+            self._write_cache(url, data)
+
+        return data
+
     def parse_html(self, content: str) -> BeautifulSoup:
         """
         Parse HTML content.
