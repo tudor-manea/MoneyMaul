@@ -9,15 +9,15 @@ from ...analysis import (
     get_available_slots_for_country,
     get_squad_slots_remaining,
 )
-from ...scrapers import ESPNScraper, FetchError, ParseError, RateLimitError, create_sample_players
+from ...scrapers import (
+    ESPNScraper,
+    FetchError,
+    ParseError,
+    RateLimitError,
+    apply_prices_to_players,
+    create_sample_players,
+)
 from ..components import render_player_table, render_team_status, render_validation
-
-
-# Default prices by position (used when fantasy site prices unavailable)
-DEFAULT_PRICES = {
-    Position.FORWARD: 12.0,
-    Position.BACK: 13.0,
-}
 
 
 def _init_session_state() -> None:
@@ -47,10 +47,10 @@ def _get_players() -> list[Player]:
 
 def _fetch_espn_players() -> list[Player]:
     """
-    Fetch real players from ESPN API.
+    Fetch real players from ESPN API and apply prices from CSV.
 
     Returns:
-        List of Player objects with estimated prices.
+        List of Player objects with prices from CSV (or defaults).
     """
     scraper = ESPNScraper()
     espn_players = scraper.scrape_all_players(year=2026, use_cache=True)
@@ -58,13 +58,11 @@ def _fetch_espn_players() -> list[Player]:
     if not espn_players:
         raise ValueError("No players found from ESPN API")
 
-    # Assign estimated prices (will be updated when fantasy site is available)
-    for player in espn_players:
-        # Use position-based default pricing
-        player.star_value = DEFAULT_PRICES.get(player.position, 12.0)
+    # Apply prices from CSV file (falls back to defaults if not found)
+    players_with_prices = apply_prices_to_players(espn_players)
 
     st.session_state.data_source = "espn"
-    return espn_players
+    return players_with_prices
 
 
 def _get_sample_players() -> list[Player]:
