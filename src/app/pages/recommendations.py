@@ -38,6 +38,7 @@ from src.scrapers import (
     ParseError,
     RateLimitError,
     load_all_players_from_csv,
+    load_static_lineups,
     apply_prices_to_players,
     create_sample_players,
     generate_mock_player_points,
@@ -124,6 +125,47 @@ def _generate_points() -> dict[str, float]:
     except Exception:
         # Fall back to mock points if form data unavailable
         return generate_mock_player_points(players, seed=42)
+
+
+def _get_sub_probabilities(team: Team) -> dict[str, float]:
+    """
+    Get substitution probabilities for team players based on lineup status.
+
+    Starters have 0% probability (they don't come on as subs).
+    Bench players have 85% probability (most get game time).
+
+    Returns:
+        Dict mapping player_id to sub probability (0.0-1.0).
+    """
+    lineup_status = load_static_lineups()
+    sub_probs: dict[str, float] = {}
+
+    for player in team.players:
+        # Try to match player to lineup by surname
+        name_parts = player.name.split()
+        surname = name_parts[-1] if name_parts else player.name
+
+        is_starter = False
+        in_squad = False
+
+        for lineup_name, starter_status in lineup_status.items():
+            if surname.lower() in lineup_name.lower():
+                in_squad = True
+                if starter_status:
+                    is_starter = True
+                break
+
+        if is_starter:
+            # Starters don't come on as subs - 0% probability
+            sub_probs[player.id] = 0.0
+        elif in_squad:
+            # Bench players usually get game time - 85% probability
+            sub_probs[player.id] = 0.85
+        else:
+            # Not in squad - assume they might play as starter
+            sub_probs[player.id] = 0.3
+
+    return sub_probs
 
 
 def _refresh_data() -> None:
@@ -356,9 +398,13 @@ def render() -> None:
 
             with col2:
                 st.subheader("⚡ Supersub Picks")
-                st.caption("Best impact subs (3x if subbed on, 0.5x otherwise)")
+                st.caption("Best bench players (3x if subbed on, 0.5x if starting)")
 
-                supersub_recs = get_supersub_recommendations(team, player_points, top_n=5)
+                # Only recommend bench players for supersub role
+                sub_probs = _get_sub_probabilities(team)
+                supersub_recs = get_supersub_recommendations(
+                    team, player_points, sub_probability=sub_probs, top_n=5
+                )
                 if supersub_recs:
                     for rec in supersub_recs:
                         _render_player_recommendation(rec)

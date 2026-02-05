@@ -425,15 +425,57 @@ def auto_select_team(
             country_counts[player.country] += 1
             selected_ids.add(player.id)
 
+    # Phase 4: Maximize budget usage by swapping to more expensive players
+    # Target: use at least 195/200 stars (97.5% budget utilization)
+    min_budget_target = MAX_BUDGET - 5  # Allow 5 stars slack
+
+    for _ in range(10):  # Max 10 iterations to prevent infinite loop
+        if team.total_value >= min_budget_target:
+            break
+
+        budget_gap = MAX_BUDGET - team.total_value
+        best_swap = None
+        best_swap_value_gain = 0
+
+        for current_player in team.players:
+            current_points = player_points.get(current_player.id, 0.0)
+            max_affordable = current_player.star_value + budget_gap
+
+            for candidate, cand_points in sorted_players:
+                if candidate.id in selected_ids:
+                    continue
+                if candidate.star_value <= current_player.star_value:
+                    continue  # Must be more expensive
+                if candidate.star_value > max_affordable:
+                    continue
+                # Only swap if points are similar or better (within 10% loss acceptable)
+                if cand_points < current_points * 0.9:
+                    continue
+
+                # Check country constraint
+                if candidate.country != current_player.country:
+                    if country_counts[candidate.country] >= MAX_PER_COUNTRY:
+                        continue
+
+                value_gain = candidate.star_value - current_player.star_value
+                if value_gain > best_swap_value_gain:
+                    best_swap = (current_player, candidate)
+                    best_swap_value_gain = value_gain
+
+        if best_swap is None:
+            break
+
+        old_player, new_player = best_swap
+        country_counts[old_player.country] -= 1
+        country_counts[new_player.country] += 1
+        team.remove_player(old_player.id)
+        selected_ids.remove(old_player.id)
+        team.add_player(new_player)
+        selected_ids.add(new_player.id)
+
     # Set captain as highest expected points player
     if team.players:
         best_captain = max(team.players, key=lambda p: player_points.get(p.id, 0.0))
         team.captain_id = best_captain.id
-
-        # Set supersub as second highest (excluding captain)
-        remaining = [p for p in team.players if p.id != best_captain.id]
-        if remaining:
-            best_supersub = max(remaining, key=lambda p: player_points.get(p.id, 0.0))
-            team.supersub_id = best_supersub.id
 
     return team
