@@ -28,6 +28,7 @@ from src.scrapers import (
     generate_mock_player_points,
     calculate_form_based_points,
     load_all_players_from_csv,
+    load_static_lineups,
 )
 from src.app.components import render_player_table, render_team_status, render_validation
 
@@ -303,8 +304,38 @@ def _auto_select_team() -> None:
     except Exception:
         player_points = generate_mock_player_points(players, seed=42)
 
-    # Select optimal team
-    st.session_state.team = auto_select_team(players, player_points)
+    # Select optimal team (captain is set by auto_select_team)
+    team = auto_select_team(players, player_points)
+
+    # Set supersub as best bench player (not a starter)
+    lineup_status = load_static_lineups()
+    bench_players = []
+    for player in team.players:
+        if player.id == team.captain_id:
+            continue
+        # Check if player is a bench player (not a starter)
+        name_parts = player.name.split()
+        surname = name_parts[-1] if name_parts else player.name
+        is_starter = False
+        for lineup_name, starter_status in lineup_status.items():
+            if surname.lower() in lineup_name.lower() and starter_status:
+                is_starter = True
+                break
+        if not is_starter:
+            bench_players.append(player)
+
+    if bench_players:
+        # Pick bench player with highest expected points
+        best_bench = max(bench_players, key=lambda p: player_points.get(p.id, 0.0))
+        team.supersub_id = best_bench.id
+    elif team.players:
+        # Fallback: pick second highest points player if no bench players identified
+        remaining = [p for p in team.players if p.id != team.captain_id]
+        if remaining:
+            best_supersub = max(remaining, key=lambda p: player_points.get(p.id, 0.0))
+            team.supersub_id = best_supersub.id
+
+    st.session_state.team = team
 
 
 def render() -> None:

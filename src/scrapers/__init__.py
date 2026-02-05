@@ -17,11 +17,13 @@ from .espn import (
 from .prices import (
     load_prices_from_csv,
     load_all_players_from_csv,
+    load_static_lineups,
     apply_prices_to_players,
     generate_prices_template,
     generate_mock_player_points,
     calculate_form_based_points,
     PRICES_CSV_PATH,
+    LINEUPS_JSON_PATH,
 )
 from .fantasy import (
     FantasyScraper,
@@ -53,11 +55,13 @@ __all__ = [
     # Prices
     "load_prices_from_csv",
     "load_all_players_from_csv",
+    "load_static_lineups",
     "apply_prices_to_players",
     "generate_prices_template",
     "generate_mock_player_points",
     "calculate_form_based_points",
     "PRICES_CSV_PATH",
+    "LINEUPS_JSON_PATH",
     # Fantasy
     "FantasyScraper",
     "create_sample_players",

@@ -1,6 +1,7 @@
 """Player price loader from CSV file."""
 
 import csv
+import json
 import random
 from collections import defaultdict
 from pathlib import Path
@@ -17,6 +18,56 @@ DEFAULT_PRICES = {
 
 # Path to player prices CSV
 PRICES_CSV_PATH = Path(__file__).parent.parent.parent / "data" / "player_prices.csv"
+
+# Path to static lineups JSON
+LINEUPS_JSON_PATH = Path(__file__).parent.parent.parent / "data" / "lineups_2026.json"
+
+# Country name to enum mapping for lineup loading
+LINEUP_COUNTRY_MAP = {
+    "England": Country.ENGLAND,
+    "Scotland": Country.SCOTLAND,
+    "Ireland": Country.IRELAND,
+    "Wales": Country.WALES,
+    "France": Country.FRANCE,
+    "Italy": Country.ITALY,
+}
+
+
+def load_static_lineups(json_path: Optional[Path] = None) -> dict[str, bool]:
+    """
+    Load 2026 starting lineup status from static JSON file.
+
+    Args:
+        json_path: Path to JSON file. Defaults to data/lineups_2026.json.
+
+    Returns:
+        Dictionary mapping player name (normalized) to is_starter status.
+        Starters map to True, bench players map to False.
+    """
+    path = json_path or LINEUPS_JSON_PATH
+    lineup_status: dict[str, bool] = {}
+
+    if not path.exists():
+        return lineup_status
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    teams = data.get("teams", {})
+    for team_name, team_data in teams.items():
+        # Add starters
+        for player in team_data.get("starters", []):
+            name = player.get("name", "")
+            if name:
+                lineup_status[name] = True
+
+        # Add bench players
+        for player in team_data.get("bench", []):
+            name = player.get("name", "")
+            if name:
+                lineup_status[name] = False
+
+    return lineup_status
 
 
 def load_prices_from_csv(csv_path: Optional[Path] = None) -> dict[str, float]:
@@ -259,6 +310,7 @@ def calculate_form_based_points(
     players: list[Player],
     form_year: int = 2025,
     lineup_year: int = 2026,
+    use_static_lineups: bool = True,
 ) -> dict[str, float]:
     """
     Calculate expected points based on real form data from previous tournament.
@@ -270,6 +322,7 @@ def calculate_form_based_points(
         players: List of Player objects (from CSV).
         form_year: Year to pull form data from (default: 2025).
         lineup_year: Year to check starting lineups (default: 2026).
+        use_static_lineups: If True, use static JSON lineups as primary source.
 
     Returns:
         Dictionary mapping player_id to expected points.
@@ -282,8 +335,18 @@ def calculate_form_based_points(
     # Get form data from previous tournament
     form_data = scraper.scrape_form_data(year=form_year, use_cache=True)
 
-    # Get current starting lineups
-    lineup_status = scraper.scrape_starting_lineups(year=lineup_year, use_cache=True)
+    # Get current starting lineups - prefer static JSON if available
+    lineup_status: dict[str, bool] = {}
+    if use_static_lineups:
+        lineup_status = load_static_lineups()
+
+    # Fall back to ESPN if no static lineups or very few players
+    if len(lineup_status) < 50:
+        espn_lineups = scraper.scrape_starting_lineups(year=lineup_year, use_cache=True)
+        # Merge ESPN data (don't overwrite static data)
+        for name, is_starter in espn_lineups.items():
+            if name not in lineup_status:
+                lineup_status[name] = is_starter
 
     # Build surname+country lookup from CSV players
     # Key: (surname_lower, country) -> list of (player_id, full_name, star_value)
