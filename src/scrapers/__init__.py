@@ -11,6 +11,7 @@ from .base import (
 from .espn import (
     ESPNScraper,
     ESPN_API_BASE,
+    ESPN_AUTUMN_API_BASE,
     ESPN_TEAM_MAP,
     jersey_to_position,
 )
@@ -50,6 +51,7 @@ __all__ = [
     # ESPN
     "ESPNScraper",
     "ESPN_API_BASE",
+    "ESPN_AUTUMN_API_BASE",
     "ESPN_TEAM_MAP",
     "jersey_to_position",
     # Prices

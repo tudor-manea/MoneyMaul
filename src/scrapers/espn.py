@@ -56,6 +56,31 @@ ESPN_TEAM_MAP = {
 # Country to ESPN team ID (reverse mapping)
 COUNTRY_TO_ESPN_ID = {v: k for k, v in ESPN_TEAM_MAP.items()}
 
+# ESPN API endpoint for Autumn Internationals (league ID: 289234)
+ESPN_AUTUMN_API_BASE = "https://site.api.espn.com/apis/site/v2/sports/rugby/289234"
+
+# Six Nations team IDs for filtering Autumn matches
+SIX_NATIONS_TEAM_IDS = set(ESPN_TEAM_MAP.keys())  # {1, 2, 3, 4, 9, 20}
+
+# Play-by-play event type text (lowercase) → PlayerMatchStats field
+ESPN_EVENT_TYPE_MAP: dict[str, str] = {
+    "try": "tries",
+    "conversion": "conversions",
+    "penalty goal": "penalty_kicks",
+    "drop goal": "drop_goals",
+    "yellow card": "yellow_cards",
+    "red card": "red_cards",
+}
+
+# November date ranges for week-by-week querying (avoids pagination)
+AUTUMN_WEEK_RANGES = [
+    "20251101-20251103",
+    "20251108-20251110",
+    "20251115-20251117",
+    "20251122-20251124",
+    "20251129-20251201",
+]
+
 # Jersey number to position mapping (1-8 forwards, 9-15 backs)
 FORWARD_JERSEYS = {1, 2, 3, 4, 5, 6, 7, 8}
 BACK_JERSEYS = {9, 10, 11, 12, 13, 14, 15}
@@ -602,3 +627,213 @@ class ESPNScraper(BaseScraper):
                         lineup_status[player_name] = is_starter
 
         return lineup_status
+
+    def scrape_autumn_fixtures(
+        self, year: int = 2025, use_cache: bool = True
+    ) -> list[dict]:
+        """
+        Scrape Autumn International fixtures involving Six Nations teams.
+
+        Queries week-by-week to avoid API pagination limits.
+        Returns lightweight dicts (not Match objects, which require gameweek 1-5).
+
+        Args:
+            year: Year of Autumn Internationals.
+            use_cache: Whether to use cached data.
+
+        Returns:
+            List of fixture dicts with keys: id, home_team_id, away_team_id,
+            home_score, away_score, completed.
+        """
+        fixtures: list[dict] = []
+        seen_ids: set[str] = set()
+
+        for date_range in AUTUMN_WEEK_RANGES:
+            url = f"{ESPN_AUTUMN_API_BASE}/scoreboard?dates={date_range}"
+            try:
+                data = self.fetch_json(url, use_cache=use_cache)
+            except Exception:
+                continue
+
+            for event in data.get("events", []):
+                match_id = event.get("id", "")
+                if match_id in seen_ids:
+                    continue
+
+                competitions = event.get("competitions", [{}])
+                if not competitions:
+                    continue
+                competition = competitions[0]
+
+                competitors = competition.get("competitors", [])
+                if len(competitors) != 2:
+                    continue
+
+                home_team_id = None
+                away_team_id = None
+                home_score = None
+                away_score = None
+
+                for comp in competitors:
+                    team_id = int(comp.get("team", {}).get("id", 0))
+                    is_home = comp.get("homeAway") == "home"
+                    score = comp.get("score")
+
+                    if is_home:
+                        home_team_id = team_id
+                        home_score = int(score) if score else None
+                    else:
+                        away_team_id = team_id
+                        away_score = int(score) if score else None
+
+                # Keep only if at least one team is a Six Nations team
+                if not ({home_team_id, away_team_id} & SIX_NATIONS_TEAM_IDS):
+                    continue
+
+                completed = home_score is not None and away_score is not None
+                seen_ids.add(match_id)
+                fixtures.append({
+                    "id": match_id,
+                    "home_team_id": home_team_id,
+                    "away_team_id": away_team_id,
+                    "home_score": home_score,
+                    "away_score": away_score,
+                    "completed": completed,
+                })
+
+        return fixtures
+
+    def scrape_play_by_play(
+        self, match_id: str, use_cache: bool = True
+    ) -> list[tuple[str, Country, Position, PlayerMatchStats]]:
+        """
+        Scrape player stats from play-by-play events for a match.
+
+        Used for Autumn Internationals where roster stats arrays are empty.
+        Extracts scoring events (tries, conversions, penalties, drop goals, cards)
+        from the details[] array.
+
+        Args:
+            match_id: ESPN match/event ID.
+            use_cache: Whether to use cached data.
+
+        Returns:
+            List of (player_name, country, position, PlayerMatchStats) tuples.
+            Includes all roster players, even those with no scoring events.
+        """
+        url = f"{ESPN_AUTUMN_API_BASE}/summary?event={match_id}"
+        data = self.fetch_json(url, use_cache=use_cache)
+
+        # Build player lookup from rosters
+        # Key: player display name -> (country, position, jersey, athlete_id)
+        player_lookup: dict[str, tuple[Country, Position, int, str]] = {}
+        rosters = data.get("rosters", [])
+
+        for team_roster in rosters:
+            team_data = team_roster.get("team", {})
+            team_id = int(team_data.get("id", 0))
+            country = ESPN_TEAM_MAP.get(team_id)
+
+            if not country:
+                continue
+
+            for player_data in team_roster.get("roster", []):
+                athlete = player_data.get("athlete", {})
+                player_name = athlete.get("displayName", "")
+                if not player_name:
+                    continue
+
+                jersey_str = player_data.get("jersey", "16")
+                jersey = int(jersey_str) if jersey_str else 16
+                position = jersey_to_position(jersey)
+                athlete_id = athlete.get("id", "")
+
+                player_lookup[player_name] = (country, position, jersey, athlete_id)
+
+        # Accumulate stats per player from play-by-play details
+        # Key: player_name -> dict of stat field -> count
+        player_stats_acc: dict[str, dict[str, int]] = {}
+
+        details = data.get("details", [])
+        for detail in details:
+            event_type_data = detail.get("type", {})
+            event_text = event_type_data.get("text", "").lower()
+
+            stat_field = ESPN_EVENT_TYPE_MAP.get(event_text)
+            if not stat_field:
+                continue
+
+            # Extract the player who performed the action
+            participants = detail.get("participants", [])
+            if not participants:
+                continue
+
+            athlete_data = participants[0].get("athlete", {})
+            player_name = athlete_data.get("displayName", "")
+
+            if not player_name:
+                continue
+
+            if player_name not in player_stats_acc:
+                player_stats_acc[player_name] = {}
+            player_stats_acc[player_name][stat_field] = (
+                player_stats_acc[player_name].get(stat_field, 0) + 1
+            )
+
+        # Build results for ALL roster players (even those with 0 events)
+        results: list[tuple[str, Country, Position, PlayerMatchStats]] = []
+
+        for player_name, (country, position, jersey, athlete_id) in player_lookup.items():
+            starter = jersey <= 15
+            selection_status = (
+                SelectionStatus.STARTER if starter else SelectionStatus.SUBSTITUTE
+            )
+
+            accumulated = player_stats_acc.get(player_name, {})
+
+            stats = PlayerMatchStats(
+                player_id=f"espn-{athlete_id}",
+                match_id=match_id,
+                selection_status=selection_status,
+                tries=accumulated.get("tries", 0),
+                conversions=accumulated.get("conversions", 0),
+                penalty_kicks=accumulated.get("penalty_kicks", 0),
+                drop_goals=accumulated.get("drop_goals", 0),
+                yellow_cards=accumulated.get("yellow_cards", 0),
+                red_cards=accumulated.get("red_cards", 0),
+            )
+
+            results.append((player_name, country, position, stats))
+
+        return results
+
+    def scrape_autumn_form_data(
+        self, year: int = 2025, use_cache: bool = True
+    ) -> list[tuple[str, Country, Position, PlayerMatchStats]]:
+        """
+        Collect per-player stats from Autumn Internationals using play-by-play data.
+
+        Args:
+            year: Year of Autumn Internationals.
+            use_cache: Whether to use cached data.
+
+        Returns:
+            List of (player_name, country, position, PlayerMatchStats) tuples,
+            one entry per player per match. Only includes Six Nations team players.
+        """
+        fixtures = self.scrape_autumn_fixtures(year=year, use_cache=use_cache)
+        all_stats: list[tuple[str, Country, Position, PlayerMatchStats]] = []
+
+        for fixture in fixtures:
+            if not fixture["completed"]:
+                continue
+
+            match_stats = self.scrape_play_by_play(
+                fixture["id"], use_cache=use_cache
+            )
+
+            # Only include players from Six Nations teams
+            for player_name, country, position, stats in match_stats:
+                all_stats.append((player_name, country, position, stats))
+
+        return all_stats

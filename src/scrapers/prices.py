@@ -306,23 +306,65 @@ def generate_mock_player_points(
     return points
 
 
+def _calculate_scoring_only_points(
+    stats: "PlayerMatchStats", position: Position
+) -> float:
+    """
+    Calculate fantasy points from scoring events only.
+
+    Used for calibrating Autumn International play-by-play data (which only has
+    scoring events) against full Six Nations data.
+
+    Args:
+        stats: Player match statistics.
+        position: Player position (forward/back).
+
+    Returns:
+        Points from tries, conversions, penalties, drop goals, and cards only.
+    """
+    from ..analysis.calculator import (
+        POINTS_CONVERSION,
+        POINTS_DROP_GOAL,
+        POINTS_PENALTY_KICK,
+        POINTS_RED_CARD,
+        POINTS_TRY_BACK,
+        POINTS_TRY_FORWARD,
+        POINTS_YELLOW_CARD,
+    )
+
+    points = 0.0
+    try_points = POINTS_TRY_FORWARD if position == Position.FORWARD else POINTS_TRY_BACK
+    points += stats.tries * try_points
+    points += stats.conversions * POINTS_CONVERSION
+    points += stats.penalty_kicks * POINTS_PENALTY_KICK
+    points += stats.drop_goals * POINTS_DROP_GOAL
+    points += stats.yellow_cards * POINTS_YELLOW_CARD
+    points += stats.red_cards * POINTS_RED_CARD
+    return points
+
+
 def calculate_form_based_points(
     players: list[Player],
     form_year: int = 2025,
     lineup_year: int = 2026,
     use_static_lineups: bool = True,
+    include_autumn: bool = True,
+    autumn_weight: float = 0.6,
 ) -> dict[str, float]:
     """
     Calculate expected points based on real form data from previous tournament.
 
     Uses actual match statistics from the form_year tournament to calculate
     fantasy points, then applies lineup bonuses from the current year.
+    Optionally incorporates Autumn International data via calibration ratios.
 
     Args:
         players: List of Player objects (from CSV).
         form_year: Year to pull form data from (default: 2025).
         lineup_year: Year to check starting lineups (default: 2026).
         use_static_lineups: If True, use static JSON lineups as primary source.
+        include_autumn: If True, incorporate Autumn International stats.
+        autumn_weight: Weight for Autumn data when blending (0.0-1.0).
 
     Returns:
         Dictionary mapping player_id to expected points.
@@ -360,27 +402,108 @@ def calculate_form_based_points(
                 (player.id, player.name, player.star_value)
             )
 
-    # Aggregate fantasy points per player from form data
-    # Key: (espn_name, country) -> list of points
-    player_points_per_match: dict[tuple[str, Country], list[float]] = defaultdict(list)
+    # Aggregate Six Nations fantasy points per player
+    # Key: (espn_name, country) -> list of (full_points, scoring_only_points)
+    sn_full_per_match: dict[tuple[str, Country], list[float]] = defaultdict(list)
+    sn_scoring_per_match: dict[tuple[str, Country], list[float]] = defaultdict(list)
     player_positions: dict[tuple[str, Country], Position] = {}
 
     for espn_name, country, position, stats in form_data:
         key = (espn_name, country)
-        points = calculate_base_points(stats, position)
-        player_points_per_match[key].append(points)
+        full_pts = calculate_base_points(stats, position)
+        scoring_pts = _calculate_scoring_only_points(stats, position)
+        sn_full_per_match[key].append(full_pts)
+        sn_scoring_per_match[key].append(scoring_pts)
         player_positions[key] = position
+
+    # Fetch Autumn International data if requested
+    autumn_scoring_per_match: dict[tuple[str, Country], list[float]] = defaultdict(list)
+    autumn_positions: dict[tuple[str, Country], Position] = {}
+    if include_autumn:
+        try:
+            autumn_data = scraper.scrape_autumn_form_data(
+                year=form_year, use_cache=True
+            )
+            for espn_name, country, position, stats in autumn_data:
+                key = (espn_name, country)
+                scoring_pts = _calculate_scoring_only_points(stats, position)
+                autumn_scoring_per_match[key].append(scoring_pts)
+                autumn_positions[key] = position
+        except Exception:
+            # Graceful fallback: proceed with Six Nations data only
+            pass
+
+    # Compute position-average calibration ratios from Six Nations data
+    # ratio = full_points / scoring_only_points (per position)
+    pos_ratio_sums: dict[Position, float] = defaultdict(float)
+    pos_ratio_counts: dict[Position, int] = defaultdict(int)
+
+    for key, full_list in sn_full_per_match.items():
+        scoring_list = sn_scoring_per_match[key]
+        position = player_positions[key]
+
+        sn_full_avg = sum(full_list) / len(full_list)
+        sn_scoring_avg = sum(scoring_list) / len(scoring_list)
+
+        if sn_scoring_avg >= 1.0:
+            ratio = sn_full_avg / sn_scoring_avg
+            pos_ratio_sums[position] += ratio
+            pos_ratio_counts[position] += 1
+
+    pos_avg_ratios: dict[Position, float] = {}
+    for pos in Position:
+        if pos_ratio_counts.get(pos, 0) > 0:
+            pos_avg_ratios[pos] = pos_ratio_sums[pos] / pos_ratio_counts[pos]
+        else:
+            pos_avg_ratios[pos] = 2.0  # Sensible default
+
+    # All unique player keys from both data sources
+    all_player_keys = set(sn_full_per_match.keys()) | set(autumn_scoring_per_match.keys())
 
     # Match ESPN players to CSV players and calculate form scores
     points: dict[str, float] = {}
     matched_csv_ids: set[str] = set()
 
-    for (espn_name, country), match_points in player_points_per_match.items():
-        if not match_points:
+    for key in all_player_keys:
+        espn_name, country = key
+
+        has_sn = key in sn_full_per_match
+        has_autumn = key in autumn_scoring_per_match
+        position = player_positions.get(key) or autumn_positions.get(key)
+        if position is None:
             continue
 
-        # Calculate average points across matches
-        avg_points = sum(match_points) / len(match_points)
+        # Calculate per-source averages
+        sn_full_avg = 0.0
+        sn_scoring_avg = 0.0
+        autumn_scoring_avg = 0.0
+
+        if has_sn:
+            sn_full_avg = sum(sn_full_per_match[key]) / len(sn_full_per_match[key])
+            sn_scoring_avg = sum(sn_scoring_per_match[key]) / len(sn_scoring_per_match[key])
+
+        if has_autumn:
+            autumn_scoring_avg = (
+                sum(autumn_scoring_per_match[key]) / len(autumn_scoring_per_match[key])
+            )
+
+        # Compute blended average points
+        if has_sn and has_autumn and include_autumn:
+            # Both sources: use personal calibration ratio
+            if sn_scoring_avg >= 1.0:
+                personal_ratio = sn_full_avg / sn_scoring_avg
+            else:
+                personal_ratio = pos_avg_ratios[position]
+            autumn_estimated = autumn_scoring_avg * personal_ratio
+            avg_points = (1 - autumn_weight) * sn_full_avg + autumn_weight * autumn_estimated
+        elif has_sn:
+            # Six Nations only
+            avg_points = sn_full_avg
+        elif has_autumn and include_autumn:
+            # Autumn only (new caps): use position-average ratio
+            avg_points = autumn_scoring_avg * pos_avg_ratios[position]
+        else:
+            continue
 
         # Try to match to CSV player by surname + country
         espn_name_parts = espn_name.split()

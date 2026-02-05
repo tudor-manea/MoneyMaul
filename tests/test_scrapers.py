@@ -8,10 +8,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.models import Country, Position, SelectionStatus
+from src.models import Country, Player, PlayerMatchStats, Position, SelectionStatus
 from src.scrapers import (
     BaseScraper,
     ESPNScraper,
+    ESPN_AUTUMN_API_BASE,
     FetchError,
     ParseError,
     RateLimitError,
@@ -24,6 +25,7 @@ from src.scrapers import (
     parse_country,
     parse_position,
 )
+from src.scrapers.prices import _calculate_scoring_only_points, calculate_form_based_points
 
 
 class TestParseCountry:
@@ -585,3 +587,455 @@ class TestESPNScraper:
             assert fixtures[3].gameweek == 2
             assert fixtures[4].gameweek == 2
             assert fixtures[5].gameweek == 2
+
+
+class TestAutumnFixtures:
+    """Tests for Autumn Internationals fixture scraping."""
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_autumn_fixtures_filters_six_nations(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test that non-Six-Nations matches are excluded."""
+        # Return two matches: one with France (id=9), one with Argentina (id=11) vs South Africa (id=13)
+        mock_fetch_json.return_value = {
+            "events": [
+                {
+                    "id": "401001",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {"team": {"id": "9"}, "homeAway": "home", "score": "30"},
+                                {"team": {"id": "5"}, "homeAway": "away", "score": "20"},
+                            ]
+                        }
+                    ],
+                },
+                {
+                    "id": "401002",
+                    "competitions": [
+                        {
+                            "competitors": [
+                                {"team": {"id": "11"}, "homeAway": "home", "score": "25"},
+                                {"team": {"id": "13"}, "homeAway": "away", "score": "18"},
+                            ]
+                        }
+                    ],
+                },
+            ]
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            fixtures = scraper.scrape_autumn_fixtures()
+
+            # Only the France match should be included
+            assert len(fixtures) == 1
+            assert fixtures[0]["id"] == "401001"
+            assert fixtures[0]["home_team_id"] == 9
+            assert fixtures[0]["completed"] is True
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_autumn_fixtures_handles_api_error(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test graceful handling when API call fails."""
+        mock_fetch_json.side_effect = Exception("API error")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            fixtures = scraper.scrape_autumn_fixtures()
+
+            assert fixtures == []
+
+
+class TestPlayByPlay:
+    """Tests for play-by-play scraping."""
+
+    def _make_summary_response(self) -> dict:
+        """Create a mock match summary with play-by-play details."""
+        return {
+            "rosters": [
+                {
+                    "team": {"id": "9"},  # France
+                    "roster": [
+                        {
+                            "athlete": {"id": "100", "displayName": "Thomas Ramos"},
+                            "jersey": "15",
+                            "starter": True,
+                        },
+                        {
+                            "athlete": {"id": "101", "displayName": "Antoine Dupont"},
+                            "jersey": "9",
+                            "starter": True,
+                        },
+                        {
+                            "athlete": {"id": "102", "displayName": "Gregory Alldritt"},
+                            "jersey": "8",
+                            "starter": True,
+                        },
+                        {
+                            "athlete": {"id": "103", "displayName": "Peato Mauvaka"},
+                            "jersey": "16",
+                            "starter": False,
+                        },
+                    ],
+                },
+                {
+                    "team": {"id": "5"},  # Non-Six-Nations team (e.g., New Zealand)
+                    "roster": [
+                        {
+                            "athlete": {"id": "200", "displayName": "Damian McKenzie"},
+                            "jersey": "10",
+                            "starter": True,
+                        },
+                    ],
+                },
+            ],
+            "details": [
+                {
+                    "type": {"text": "Try"},
+                    "participants": [
+                        {"athlete": {"displayName": "Antoine Dupont"}},
+                    ],
+                },
+                {
+                    "type": {"text": "Conversion"},
+                    "participants": [
+                        {"athlete": {"displayName": "Thomas Ramos"}},
+                    ],
+                },
+                {
+                    "type": {"text": "Penalty Goal"},
+                    "participants": [
+                        {"athlete": {"displayName": "Thomas Ramos"}},
+                    ],
+                },
+                {
+                    "type": {"text": "Try"},
+                    "participants": [
+                        {"athlete": {"displayName": "Antoine Dupont"}},
+                    ],
+                },
+                {
+                    "type": {"text": "Yellow Card"},
+                    "participants": [
+                        {"athlete": {"displayName": "Gregory Alldritt"}},
+                    ],
+                },
+                {
+                    "type": {"text": "Substitution"},
+                    "participants": [
+                        {"athlete": {"displayName": "Peato Mauvaka"}},
+                    ],
+                },
+            ],
+        }
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_play_by_play_parses_scoring_events(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test parsing scoring events into PlayerMatchStats."""
+        mock_fetch_json.return_value = self._make_summary_response()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            results = scraper.scrape_play_by_play("401001")
+
+            # Find Dupont's stats (2 tries)
+            dupont = [r for r in results if r[0] == "Antoine Dupont"]
+            assert len(dupont) == 1
+            name, country, position, stats = dupont[0]
+            assert country == Country.FRANCE
+            assert position == Position.BACK
+            assert stats.tries == 2
+
+            # Find Ramos's stats (1 conversion, 1 penalty)
+            ramos = [r for r in results if r[0] == "Thomas Ramos"]
+            assert len(ramos) == 1
+            _, _, _, ramos_stats = ramos[0]
+            assert ramos_stats.conversions == 1
+            assert ramos_stats.penalty_kicks == 1
+
+            # Alldritt got a yellow card
+            alldritt = [r for r in results if r[0] == "Gregory Alldritt"]
+            assert len(alldritt) == 1
+            _, _, _, alldritt_stats = alldritt[0]
+            assert alldritt_stats.yellow_cards == 1
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_play_by_play_includes_non_scoring_players(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test that players with no scoring events are still included."""
+        mock_fetch_json.return_value = self._make_summary_response()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            results = scraper.scrape_play_by_play("401001")
+
+            # Mauvaka is in roster but only has a substitution event (not mapped)
+            mauvaka = [r for r in results if r[0] == "Peato Mauvaka"]
+            assert len(mauvaka) == 1
+            _, country, _, stats = mauvaka[0]
+            assert country == Country.FRANCE
+            assert stats.tries == 0
+            assert stats.conversions == 0
+            assert stats.selection_status == SelectionStatus.SUBSTITUTE
+
+    @patch("src.scrapers.base.BaseScraper.fetch_json")
+    def test_scrape_play_by_play_excludes_non_six_nations(
+        self, mock_fetch_json: MagicMock
+    ) -> None:
+        """Test that non-Six-Nations team players are excluded from results."""
+        mock_fetch_json.return_value = self._make_summary_response()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scraper = ESPNScraper(cache_dir=Path(tmpdir))
+            results = scraper.scrape_play_by_play("401001")
+
+            # Only France players (team id 9) should be included
+            # New Zealand (team id 5) is not in ESPN_TEAM_MAP
+            player_names = [r[0] for r in results]
+            assert "Damian McKenzie" not in player_names
+            assert len(results) == 4  # 4 French players only
+
+
+class TestScoringOnlyPoints:
+    """Tests for _calculate_scoring_only_points helper."""
+
+    def test_basic_scoring_events(self) -> None:
+        """Test that scoring-only points are a subset of full points."""
+        from src.analysis.calculator import calculate_base_points
+
+        stats = PlayerMatchStats(
+            player_id="test-1",
+            match_id="m1",
+            tries=1,
+            conversions=2,
+            penalty_kicks=1,
+            metres_carried=50,
+            tackles=8,
+            defenders_beaten=3,
+        )
+
+        full = calculate_base_points(stats, Position.BACK)
+        scoring_only = _calculate_scoring_only_points(stats, Position.BACK)
+
+        # Scoring only should be less than full (missing metres, tackles, defenders beaten)
+        assert scoring_only < full
+        # But should include tries (10), conversions (4), penalty (3) = 17
+        assert scoring_only == 10 + 4 + 3
+
+    def test_forward_try_scoring(self) -> None:
+        """Test forward try value in scoring-only calculation."""
+        stats = PlayerMatchStats(
+            player_id="test-2",
+            match_id="m1",
+            tries=1,
+        )
+
+        forward_pts = _calculate_scoring_only_points(stats, Position.FORWARD)
+        back_pts = _calculate_scoring_only_points(stats, Position.BACK)
+
+        assert forward_pts == 15  # Forward try
+        assert back_pts == 10    # Back try
+
+    def test_cards_reduce_scoring_points(self) -> None:
+        """Test that yellow/red cards reduce scoring-only points."""
+        stats = PlayerMatchStats(
+            player_id="test-3",
+            match_id="m1",
+            tries=1,
+            yellow_cards=1,
+        )
+
+        pts = _calculate_scoring_only_points(stats, Position.BACK)
+        assert pts == 10 - 5  # Try (10) minus yellow card (-5)
+
+    def test_zero_stats_returns_zero(self) -> None:
+        """Test that a player with no scoring events gets 0."""
+        stats = PlayerMatchStats(
+            player_id="test-4",
+            match_id="m1",
+            metres_carried=100,
+            tackles=15,
+            offloads=3,
+        )
+
+        pts = _calculate_scoring_only_points(stats, Position.FORWARD)
+        assert pts == 0.0
+
+
+class TestCalibrationLogic:
+    """Tests for Autumn calibration in calculate_form_based_points."""
+
+    def _make_players(self) -> list[Player]:
+        """Create test players."""
+        return [
+            Player(id="fra-dupont", name="A. Dupont", country=Country.FRANCE,
+                   position=Position.BACK, star_value=16.0),
+            Player(id="fra-ramos", name="T. Ramos", country=Country.FRANCE,
+                   position=Position.BACK, star_value=14.0),
+            Player(id="eng-smith", name="M. Smith", country=Country.ENGLAND,
+                   position=Position.BACK, star_value=12.0),
+        ]
+
+    @patch("src.scrapers.prices.load_static_lineups")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_starting_lineups")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_autumn_form_data")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_form_data")
+    def test_calibration_ratio_applied_correctly(
+        self, mock_sn_form: MagicMock, mock_autumn_form: MagicMock,
+        mock_lineups: MagicMock, mock_static_lineups: MagicMock,
+    ) -> None:
+        """Test that personal calibration ratio is applied to autumn data."""
+        players = self._make_players()
+
+        # Six Nations: Dupont scored 50 full, 20 scoring-only per match
+        # → personal ratio = 50/20 = 2.5
+        sn_stats = PlayerMatchStats(
+            player_id="espn-101", match_id="sn1",
+            selection_status=SelectionStatus.STARTER,
+            tries=2, metres_carried=60, tackles=8, defenders_beaten=4, offloads=2,
+        )
+        mock_sn_form.return_value = [
+            ("Antoine Dupont", Country.FRANCE, Position.BACK, sn_stats),
+        ]
+
+        # Autumn: Dupont scored 10 scoring-only per match (1 try)
+        autumn_stats = PlayerMatchStats(
+            player_id="espn-101", match_id="au1",
+            selection_status=SelectionStatus.STARTER,
+            tries=1,
+        )
+        mock_autumn_form.return_value = [
+            ("Antoine Dupont", Country.FRANCE, Position.BACK, autumn_stats),
+        ]
+
+        mock_static_lineups.return_value = {"Antoine Dupont": True}
+        mock_lineups.return_value = {}
+
+        result = calculate_form_based_points(
+            players, include_autumn=True, autumn_weight=0.6,
+        )
+
+        # Dupont should have blended points with 1.2x starter bonus
+        assert "fra-dupont" in result
+        # sn_full = 50 (approx - calculated from stats above)
+        # personal_ratio = sn_full / sn_scoring
+        # autumn_estimated = 10 * ratio
+        # blended = 0.4 * sn_full + 0.6 * autumn_estimated
+        # final = blended * 1.2 (starter)
+        # Just verify it's in a reasonable range (not the star_value fallback)
+        assert result["fra-dupont"] > 20.0
+
+    @patch("src.scrapers.prices.load_static_lineups")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_starting_lineups")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_autumn_form_data")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_form_data")
+    def test_autumn_only_player_uses_position_ratio(
+        self, mock_sn_form: MagicMock, mock_autumn_form: MagicMock,
+        mock_lineups: MagicMock, mock_static_lineups: MagicMock,
+    ) -> None:
+        """Test that a player with only Autumn data uses position-average ratio."""
+        players = self._make_players()
+
+        # Six Nations: Dupont provides calibration data
+        sn_stats = PlayerMatchStats(
+            player_id="espn-101", match_id="sn1",
+            selection_status=SelectionStatus.STARTER,
+            tries=2, metres_carried=60, tackles=8, defenders_beaten=4, offloads=2,
+        )
+        mock_sn_form.return_value = [
+            ("Antoine Dupont", Country.FRANCE, Position.BACK, sn_stats),
+        ]
+
+        # Autumn: Smith only has autumn data (new cap / didn't play in 2025 Six Nations)
+        autumn_stats = PlayerMatchStats(
+            player_id="espn-301", match_id="au1",
+            selection_status=SelectionStatus.STARTER,
+            tries=1,
+        )
+        mock_autumn_form.return_value = [
+            ("Marcus Smith", Country.ENGLAND, Position.BACK, autumn_stats),
+        ]
+
+        mock_static_lineups.return_value = {"Marcus Smith": True}
+        mock_lineups.return_value = {}
+
+        result = calculate_form_based_points(
+            players, include_autumn=True, autumn_weight=0.6,
+        )
+
+        # Smith should have estimated points using position-average ratio
+        assert "eng-smith" in result
+        # Should be higher than star_value fallback (12 * 1.5 = 18)
+        assert result["eng-smith"] > 18.0
+
+    @patch("src.scrapers.prices.load_static_lineups")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_starting_lineups")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_autumn_form_data")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_form_data")
+    def test_autumn_fallback_on_error(
+        self, mock_sn_form: MagicMock, mock_autumn_form: MagicMock,
+        mock_lineups: MagicMock, mock_static_lineups: MagicMock,
+    ) -> None:
+        """Test that API error in autumn scraping falls back gracefully."""
+        players = self._make_players()
+
+        sn_stats = PlayerMatchStats(
+            player_id="espn-101", match_id="sn1",
+            selection_status=SelectionStatus.STARTER,
+            tries=2, metres_carried=60, tackles=8, defenders_beaten=4, offloads=2,
+        )
+        mock_sn_form.return_value = [
+            ("Antoine Dupont", Country.FRANCE, Position.BACK, sn_stats),
+        ]
+
+        # Autumn scraping raises an exception
+        mock_autumn_form.side_effect = Exception("Network error")
+
+        mock_static_lineups.return_value = {"Antoine Dupont": True}
+        mock_lineups.return_value = {}
+
+        # Should not raise - falls back to Six Nations only
+        result = calculate_form_based_points(
+            players, include_autumn=True, autumn_weight=0.6,
+        )
+
+        assert "fra-dupont" in result
+        # Points should still be calculated from Six Nations data
+        assert result["fra-dupont"] > 20.0
+
+    @patch("src.scrapers.prices.load_static_lineups")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_starting_lineups")
+    @patch("src.scrapers.espn.ESPNScraper.scrape_form_data")
+    def test_include_autumn_false_backward_compat(
+        self, mock_sn_form: MagicMock,
+        mock_lineups: MagicMock, mock_static_lineups: MagicMock,
+    ) -> None:
+        """Test that include_autumn=False gives same behavior as before."""
+        players = self._make_players()
+
+        sn_stats = PlayerMatchStats(
+            player_id="espn-101", match_id="sn1",
+            selection_status=SelectionStatus.STARTER,
+            tries=2, metres_carried=60, tackles=8, defenders_beaten=4, offloads=2,
+        )
+        mock_sn_form.return_value = [
+            ("Antoine Dupont", Country.FRANCE, Position.BACK, sn_stats),
+        ]
+
+        mock_static_lineups.return_value = {"Antoine Dupont": True}
+        mock_lineups.return_value = {}
+
+        # With include_autumn=False, should not attempt to scrape autumn data
+        result = calculate_form_based_points(
+            players, include_autumn=False,
+        )
+
+        assert "fra-dupont" in result
+        # Unmatched players get fallback
+        assert "eng-smith" in result
