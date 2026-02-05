@@ -2,10 +2,12 @@
 
 import csv
 import random
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
 from ..models import Country, Player, Position
+from ..analysis.calculator import calculate_base_points
 
 # Default prices by position when no CSV price available
 DEFAULT_PRICES = {
@@ -249,6 +251,139 @@ def generate_mock_player_points(
 
         total = max(base + variance + consistency_bonus, 5.0)
         points[player.id] = round(total, 1)
+
+    return points
+
+
+def calculate_form_based_points(
+    players: list[Player],
+    form_year: int = 2025,
+    lineup_year: int = 2026,
+) -> dict[str, float]:
+    """
+    Calculate expected points based on real form data from previous tournament.
+
+    Uses actual match statistics from the form_year tournament to calculate
+    fantasy points, then applies lineup bonuses from the current year.
+
+    Args:
+        players: List of Player objects (from CSV).
+        form_year: Year to pull form data from (default: 2025).
+        lineup_year: Year to check starting lineups (default: 2026).
+
+    Returns:
+        Dictionary mapping player_id to expected points.
+    """
+    # Import here to avoid circular imports
+    from .espn import ESPNScraper
+
+    scraper = ESPNScraper()
+
+    # Get form data from previous tournament
+    form_data = scraper.scrape_form_data(year=form_year, use_cache=True)
+
+    # Get current starting lineups
+    lineup_status = scraper.scrape_starting_lineups(year=lineup_year, use_cache=True)
+
+    # Build surname+country lookup from CSV players
+    # Key: (surname_lower, country) -> list of (player_id, full_name, star_value)
+    csv_lookup: dict[tuple[str, Country], list[tuple[str, str, float]]] = defaultdict(list)
+    for player in players:
+        name_parts = player.name.split()
+        if name_parts:
+            # Get last part as surname
+            surname = name_parts[-1].lower()
+            csv_lookup[(surname, player.country)].append(
+                (player.id, player.name, player.star_value)
+            )
+
+    # Aggregate fantasy points per player from form data
+    # Key: (espn_name, country) -> list of points
+    player_points_per_match: dict[tuple[str, Country], list[float]] = defaultdict(list)
+    player_positions: dict[tuple[str, Country], Position] = {}
+
+    for espn_name, country, position, stats in form_data:
+        key = (espn_name, country)
+        points = calculate_base_points(stats, position)
+        player_points_per_match[key].append(points)
+        player_positions[key] = position
+
+    # Match ESPN players to CSV players and calculate form scores
+    points: dict[str, float] = {}
+    matched_csv_ids: set[str] = set()
+
+    for (espn_name, country), match_points in player_points_per_match.items():
+        if not match_points:
+            continue
+
+        # Calculate average points across matches
+        avg_points = sum(match_points) / len(match_points)
+
+        # Try to match to CSV player by surname + country
+        espn_name_parts = espn_name.split()
+        if not espn_name_parts:
+            continue
+
+        espn_surname = espn_name_parts[-1].lower()
+        csv_candidates = csv_lookup.get((espn_surname, country), [])
+
+        matched_player_id = None
+        if len(csv_candidates) == 1:
+            # Single match - use it
+            matched_player_id = csv_candidates[0][0]
+        elif len(csv_candidates) > 1:
+            # Multiple matches - try to match by full first name
+            espn_first = espn_name_parts[0].lower() if len(espn_name_parts) > 1 else ""
+            for player_id, full_name, _ in csv_candidates:
+                csv_parts = full_name.split()
+                # CSV names like "A. Dupont" - check if first initial matches
+                csv_first = csv_parts[0].lower() if csv_parts else ""
+                if csv_first and espn_first:
+                    if csv_first.startswith(espn_first[0]) or espn_first.startswith(csv_first[0]):
+                        matched_player_id = player_id
+                        break
+            # If still no match, just take the first candidate
+            if matched_player_id is None:
+                matched_player_id = csv_candidates[0][0]
+
+        if matched_player_id:
+            # Apply lineup bonus
+            is_starter = lineup_status.get(espn_name, False)
+            in_squad = espn_name in lineup_status
+
+            if is_starter:
+                # Starter bonus: +20%
+                final_points = avg_points * 1.2
+            elif in_squad:
+                # In squad but not starting: no modifier
+                final_points = avg_points
+            else:
+                # Not in 2026 squad: -30%
+                final_points = avg_points * 0.7
+
+            points[matched_player_id] = round(final_points, 1)
+            matched_csv_ids.add(matched_player_id)
+
+    # Fallback for unmatched CSV players: star_value * 1.5 (below avg form)
+    for player in players:
+        if player.id not in matched_csv_ids:
+            # Check if they're in the 2026 lineup by trying surname match
+            name_parts = player.name.split()
+            surname = name_parts[-1] if name_parts else player.name
+
+            # Search lineup_status for matching surname
+            is_in_lineup = False
+            for lineup_name in lineup_status:
+                if surname.lower() in lineup_name.lower():
+                    is_in_lineup = True
+                    break
+
+            if is_in_lineup:
+                # In 2026 squad but no 2025 form data - moderate estimate
+                points[player.id] = round(player.star_value * 2.0, 1)
+            else:
+                # Not in squad and no form data - low estimate
+                points[player.id] = round(player.star_value * 1.5, 1)
 
     return points
 

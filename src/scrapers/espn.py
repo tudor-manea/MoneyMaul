@@ -11,6 +11,38 @@ from .base import BaseScraper, ParseError, CACHE_DIR
 # ESPN API endpoint for Six Nations (league ID: 180659)
 ESPN_API_BASE = "https://site.api.espn.com/apis/site/v2/sports/rugby/180659"
 
+# World Rugby Rankings API
+WORLD_RUGBY_RANKINGS_URL = "https://api.wr-rims-prod.pulselive.com/rugby/v3/rankings/mru"
+
+# ESPN roster stat name → PlayerMatchStats field mapping
+# Stats come as a list of {name, value, displayValue} objects
+ESPN_STAT_MAP: dict[str, str] = {
+    "tries": "tries",
+    "tryAssists": "try_assists",
+    "conversionGoals": "conversions",
+    "penaltyGoals": "penalty_kicks",
+    "dropGoalsConverted": "drop_goals",
+    "metres": "metres_carried",
+    "defendersBeaten": "defenders_beaten",
+    "offload": "offloads",
+    "tackles": "tackles",
+    "penaltiesConceded": "penalties_conceded",
+    "yellowCards": "yellow_cards",
+    "redCards": "red_cards",
+    "rucksWon": "breakdown_steals",
+    "lineoutsWon": "lineout_steals",
+}
+
+# World Rugby team name → Country mapping
+WORLD_RUGBY_TEAM_MAP: dict[str, Country] = {
+    "England": Country.ENGLAND,
+    "Scotland": Country.SCOTLAND,
+    "Ireland": Country.IRELAND,
+    "Wales": Country.WALES,
+    "France": Country.FRANCE,
+    "Italy": Country.ITALY,
+}
+
 # ESPN team ID to Country mapping
 ESPN_TEAM_MAP = {
     1: Country.ENGLAND,
@@ -379,3 +411,194 @@ class ESPNScraper(BaseScraper):
             "players": players,
             "stats": stats,
         }
+
+    def scrape_roster_stats(
+        self, match_id: str, use_cache: bool = True
+    ) -> list[tuple[str, Country, Position, PlayerMatchStats]]:
+        """
+        Scrape detailed player statistics from roster data in a completed match.
+
+        Uses rosters[].roster[].stats[] which contains a list of {name, value} dicts,
+        rather than boxscore data.
+
+        Args:
+            match_id: ESPN match/event ID.
+            use_cache: Whether to use cached data.
+
+        Returns:
+            List of (player_name, country, position, PlayerMatchStats) tuples.
+        """
+        url = f"{self.base_url}/summary?event={match_id}"
+        data = self.fetch_json(url, use_cache=use_cache)
+
+        results: list[tuple[str, Country, Position, PlayerMatchStats]] = []
+        rosters = data.get("rosters", [])
+
+        for team_roster in rosters:
+            team_data = team_roster.get("team", {})
+            team_id = int(team_data.get("id", 0))
+            country = ESPN_TEAM_MAP.get(team_id)
+
+            if not country:
+                continue
+
+            roster = team_roster.get("roster", [])
+            for player_data in roster:
+                try:
+                    athlete = player_data.get("athlete", {})
+                    player_name = athlete.get("displayName", "")
+
+                    if not player_name:
+                        continue
+
+                    # Get jersey number for position
+                    jersey_str = player_data.get("jersey", "16")
+                    jersey = int(jersey_str) if jersey_str else 16
+                    position = jersey_to_position(jersey)
+
+                    # Determine if starter
+                    starter = player_data.get("starter", False)
+                    selection_status = (
+                        SelectionStatus.STARTER if starter else SelectionStatus.SUBSTITUTE
+                    )
+
+                    # Parse stats from list format
+                    stats_list = player_data.get("stats", [])
+                    stats_dict: dict[str, float] = {}
+                    for stat in stats_list:
+                        if isinstance(stat, dict):
+                            stat_name = stat.get("name", "")
+                            stat_value = stat.get("value", 0)
+                            if stat_name:
+                                stats_dict[stat_name] = float(stat_value) if stat_value else 0.0
+
+                    # Map ESPN stats to PlayerMatchStats fields
+                    player_stats = PlayerMatchStats(
+                        player_id=f"espn-{athlete.get('id', '')}",
+                        match_id=match_id,
+                        selection_status=selection_status,
+                        tries=int(stats_dict.get("tries", 0)),
+                        try_assists=int(stats_dict.get("tryAssists", 0)),
+                        conversions=int(stats_dict.get("conversionGoals", 0)),
+                        penalty_kicks=int(stats_dict.get("penaltyGoals", 0)),
+                        drop_goals=int(stats_dict.get("dropGoalsConverted", 0)),
+                        metres_carried=int(stats_dict.get("metres", 0)),
+                        defenders_beaten=int(stats_dict.get("defendersBeaten", 0)),
+                        offloads=int(stats_dict.get("offload", 0)),
+                        tackles=int(stats_dict.get("tackles", 0)),
+                        breakdown_steals=int(stats_dict.get("rucksWon", 0)),
+                        lineout_steals=int(stats_dict.get("lineoutsWon", 0)),
+                        penalties_conceded=int(stats_dict.get("penaltiesConceded", 0)),
+                        yellow_cards=int(stats_dict.get("yellowCards", 0)),
+                        red_cards=int(stats_dict.get("redCards", 0)),
+                        player_of_match=False,  # Not available in roster stats
+                    )
+
+                    results.append((player_name, country, position, player_stats))
+
+                except (KeyError, ValueError, TypeError):
+                    continue
+
+        return results
+
+    def scrape_form_data(
+        self, year: int = 2025, use_cache: bool = True
+    ) -> list[tuple[str, Country, Position, PlayerMatchStats]]:
+        """
+        Collect per-player-per-match stats across all completed matches in a year.
+
+        Args:
+            year: Tournament year to scrape (default 2025 for form data).
+            use_cache: Whether to use cached data.
+
+        Returns:
+            List of (player_name, country, position, PlayerMatchStats) tuples,
+            one entry per player per match they played in.
+        """
+        fixtures = self.scrape_fixtures(year=year, use_cache=use_cache)
+        all_stats: list[tuple[str, Country, Position, PlayerMatchStats]] = []
+
+        for match in fixtures:
+            if not match.is_completed:
+                continue
+
+            match_stats = self.scrape_roster_stats(match.id, use_cache=use_cache)
+            all_stats.extend(match_stats)
+
+        return all_stats
+
+    def fetch_world_rankings(self, use_cache: bool = True) -> dict[Country, float]:
+        """
+        Fetch current World Rugby rankings for Six Nations teams.
+
+        Args:
+            use_cache: Whether to use cached data.
+
+        Returns:
+            Dict mapping Country to rating points (e.g., Ireland ~95, Italy ~75).
+        """
+        data = self.fetch_json(WORLD_RUGBY_RANKINGS_URL, use_cache=use_cache)
+
+        rankings: dict[Country, float] = {}
+        entries = data.get("entries", [])
+
+        for entry in entries:
+            team = entry.get("team", {})
+            team_name = team.get("name", "")
+            rating = float(entry.get("pts", 0.0))
+
+            country = WORLD_RUGBY_TEAM_MAP.get(team_name)
+            if country:
+                rankings[country] = rating
+
+        return rankings
+
+    def scrape_starting_lineups(
+        self, year: int = 2026, use_cache: bool = True
+    ) -> dict[str, bool]:
+        """
+        Fetch starting lineup status for all players in upcoming/current matches.
+
+        Args:
+            year: Tournament year.
+            use_cache: Whether to use cached data.
+
+        Returns:
+            Dict mapping player name (normalized) to is_starter status.
+            Players not in any squad return False implicitly.
+        """
+        fixtures = self.scrape_fixtures(year=year, use_cache=use_cache)
+        lineup_status: dict[str, bool] = {}
+
+        for match in fixtures:
+            url = f"{self.base_url}/summary?event={match.id}"
+            data = self.fetch_json(url, use_cache=use_cache)
+
+            rosters = data.get("rosters", [])
+            for team_roster in rosters:
+                roster = team_roster.get("roster", [])
+
+                # Empty roster means lineups not yet announced
+                if not roster:
+                    continue
+
+                for player_data in roster:
+                    athlete = player_data.get("athlete", {})
+                    player_name = athlete.get("displayName", "")
+
+                    if not player_name:
+                        continue
+
+                    # Jersey 1-15 = starters, 16-23 = bench
+                    # Also check starter field
+                    starter = player_data.get("starter", False)
+                    jersey_str = player_data.get("jersey", "")
+                    jersey = int(jersey_str) if jersey_str else 99
+
+                    is_starter = starter or (1 <= jersey <= 15)
+
+                    # Use latest match info (don't overwrite starter with bench)
+                    if player_name not in lineup_status or is_starter:
+                        lineup_status[player_name] = is_starter
+
+        return lineup_status

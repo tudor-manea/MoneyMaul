@@ -20,6 +20,7 @@ from .prices import (
     apply_prices_to_players,
     generate_prices_template,
     generate_mock_player_points,
+    calculate_form_based_points,
     PRICES_CSV_PATH,
 )
 from .fantasy import (
@@ -55,6 +56,7 @@ __all__ = [
     "apply_prices_to_players",
     "generate_prices_template",
     "generate_mock_player_points",
+    "calculate_form_based_points",
     "PRICES_CSV_PATH",
     # Fantasy
     "FantasyScraper",

@@ -41,6 +41,7 @@ from src.scrapers import (
     apply_prices_to_players,
     create_sample_players,
     generate_mock_player_points,
+    calculate_form_based_points,
 )
 
 
@@ -110,9 +111,19 @@ def _get_match_stats() -> list:
 
 
 def _generate_points() -> dict[str, float]:
-    """Generate realistic varied mock points for all players."""
+    """
+    Generate expected points for all players.
+
+    Uses real form data from 2025 Six Nations when available,
+    falls back to mock points if API fails.
+    """
     players = st.session_state.get("players", [])
-    return generate_mock_player_points(players, seed=42)  # Fixed seed for consistency
+
+    try:
+        return calculate_form_based_points(players, form_year=2025, lineup_year=2026)
+    except Exception:
+        # Fall back to mock points if form data unavailable
+        return generate_mock_player_points(players, seed=42)
 
 
 def _refresh_data() -> None:
@@ -125,10 +136,39 @@ def _refresh_data() -> None:
 
 def _get_historical_team_strengths() -> dict[Country, TeamStrength]:
     """
-    Get historical team strengths based on recent Six Nations performance.
+    Get team strengths from World Rugby Rankings.
 
-    Based on 2024 Six Nations results and World Rankings.
+    Falls back to hardcoded 2024 data if API is unavailable.
     """
+    # Try to fetch live World Rugby Rankings
+    try:
+        scraper = ESPNScraper()
+        rankings = scraper.fetch_world_rankings(use_cache=True)
+        if rankings and len(rankings) >= 6:
+            # Convert ratings to TeamStrength objects
+            # Ratings are typically 70-95 for Six Nations teams
+            min_rating = min(rankings.values())
+            max_rating = max(rankings.values())
+            rating_range = max_rating - min_rating if max_rating > min_rating else 1
+
+            result: dict[Country, TeamStrength] = {}
+            for country, rating in rankings.items():
+                # Normalize to 0-100 scale (10-100 to avoid zero)
+                normalized = ((rating - min_rating) / rating_range) * 90 + 10
+                result[country] = TeamStrength(
+                    country=country,
+                    matches_played=0,  # Not available from rankings
+                    points_for=0,
+                    points_against=0,
+                    wins=0,
+                    point_differential=0,
+                    strength_score=normalized,
+                )
+            return result
+    except Exception:
+        pass
+
+    # Fallback to hardcoded 2024 data
     return {
         Country.IRELAND: TeamStrength(
             country=Country.IRELAND,

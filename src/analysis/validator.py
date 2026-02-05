@@ -332,46 +332,98 @@ def auto_select_team(
     """
     Automatically select the optimal team within budget/country constraints.
 
-    Uses a greedy algorithm: sorts players by points-per-star ratio and
-    picks the best players that fit within constraints.
+    Uses a two-phase approach:
+    1. Greedy selection by expected points to get top performers
+    2. Budget optimization to upgrade players with remaining budget
 
     Args:
         players: All available players.
         player_points: Dict mapping player_id to expected points.
 
     Returns:
-        Team with optimal 15 players selected.
+        Team with optimal 15 players selected, maximizing budget usage.
     """
-    # Calculate value (points per star) for each player
-    player_values: list[tuple[Player, float]] = []
-    for player in players:
-        points = player_points.get(player.id, 0.0)
-        if points > 0 and player.star_value > 0:
-            value = points / player.star_value
-            player_values.append((player, value))
-
-    # Sort by value (highest first)
-    player_values.sort(key=lambda x: x[1], reverse=True)
+    # Sort players by expected points (highest first)
+    sorted_players = sorted(
+        [(p, player_points.get(p.id, 0.0)) for p in players if player_points.get(p.id, 0.0) > 0],
+        key=lambda x: x[1],
+        reverse=True
+    )
 
     team = Team()
     country_counts: dict[Country, int] = {c: 0 for c in Country}
+    selected_ids: set[str] = set()
 
-    for player, _ in player_values:
-        # Stop when we have 15 players
+    # Phase 1: Greedy selection by expected points
+    for player, _ in sorted_players:
         if team.squad_size >= MIN_SQUAD_SIZE:
             break
 
-        # Check budget constraint
         if team.total_value + player.star_value > MAX_BUDGET:
             continue
 
-        # Check country constraint
         if country_counts[player.country] >= MAX_PER_COUNTRY:
             continue
 
-        # Add player
         team.add_player(player)
         country_counts[player.country] += 1
+        selected_ids.add(player.id)
+
+    # Phase 2: Try to upgrade players to use more budget
+    # Sort team players by points (lowest first) for potential upgrades
+    team_by_points = sorted(team.players, key=lambda p: player_points.get(p.id, 0.0))
+
+    for current_player in team_by_points:
+        budget_available = team.budget_remaining + current_player.star_value
+        current_points = player_points.get(current_player.id, 0.0)
+
+        # Find best upgrade candidate
+        best_upgrade = None
+        best_upgrade_points = current_points
+
+        for candidate, points in sorted_players:
+            if candidate.id in selected_ids:
+                continue
+            if candidate.star_value > budget_available:
+                continue
+            if points <= best_upgrade_points:
+                continue
+
+            # Check country constraint for different country
+            if candidate.country != current_player.country:
+                if country_counts[candidate.country] >= MAX_PER_COUNTRY:
+                    continue
+
+            best_upgrade = candidate
+            best_upgrade_points = points
+
+        # Perform upgrade if found
+        if best_upgrade is not None:
+            # Update country counts
+            country_counts[current_player.country] -= 1
+            country_counts[best_upgrade.country] += 1
+
+            # Swap players
+            team.remove_player(current_player.id)
+            selected_ids.remove(current_player.id)
+            team.add_player(best_upgrade)
+            selected_ids.add(best_upgrade.id)
+
+    # Phase 3: Fill any remaining slots if we have budget
+    if team.squad_size < MIN_SQUAD_SIZE:
+        for player, _ in sorted_players:
+            if team.squad_size >= MIN_SQUAD_SIZE:
+                break
+            if player.id in selected_ids:
+                continue
+            if team.total_value + player.star_value > MAX_BUDGET:
+                continue
+            if country_counts[player.country] >= MAX_PER_COUNTRY:
+                continue
+
+            team.add_player(player)
+            country_counts[player.country] += 1
+            selected_ids.add(player.id)
 
     # Set captain as highest expected points player
     if team.players:
