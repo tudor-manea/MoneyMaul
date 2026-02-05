@@ -26,6 +26,7 @@ from src.scrapers import (
     apply_prices_to_players,
     create_sample_players,
     generate_mock_player_points,
+    calculate_form_based_points,
     load_all_players_from_csv,
 )
 from src.app.components import render_player_table, render_team_status, render_validation
@@ -293,10 +294,15 @@ def _refresh_players() -> None:
 
 
 def _auto_select_team() -> None:
-    """Auto-select optimal team using greedy algorithm."""
+    """Auto-select optimal team using real form data."""
     players = st.session_state.players
-    # Generate expected points for all players
-    player_points = generate_mock_player_points(players, seed=42)
+
+    # Use real form-based points, fall back to mock if unavailable
+    try:
+        player_points = calculate_form_based_points(players, form_year=2025, lineup_year=2026)
+    except Exception:
+        player_points = generate_mock_player_points(players, seed=42)
+
     # Select optimal team
     st.session_state.team = auto_select_team(players, player_points)
 
