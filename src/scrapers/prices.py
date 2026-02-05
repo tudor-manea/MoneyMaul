@@ -1,10 +1,11 @@
 """Player price loader from CSV file."""
 
 import csv
+import random
 from pathlib import Path
 from typing import Optional
 
-from ..models import Player, Position
+from ..models import Country, Player, Position
 
 # Default prices by position when no CSV price available
 DEFAULT_PRICES = {
@@ -118,6 +119,138 @@ def apply_prices_to_players(
         )
 
     return updated_players
+
+
+def load_all_players_from_csv(csv_path: Optional[Path] = None) -> list[Player]:
+    """
+    Load all players directly from the prices CSV file.
+
+    This creates Player objects from the CSV data, generating IDs
+    and mock ownership percentages.
+
+    Args:
+        csv_path: Path to CSV file. Defaults to data/player_prices.csv.
+
+    Returns:
+        List of Player objects with all data from CSV.
+    """
+    path = csv_path or PRICES_CSV_PATH
+    players: list[Player] = []
+    seen_ids: set[str] = set()
+
+    if not path.exists():
+        return players
+
+    # Country name mapping
+    country_map = {
+        "england": Country.ENGLAND,
+        "scotland": Country.SCOTLAND,
+        "ireland": Country.IRELAND,
+        "wales": Country.WALES,
+        "france": Country.FRANCE,
+        "italy": Country.ITALY,
+    }
+
+    # Use local RNG for ownership generation to avoid global state mutation
+    rng = random.Random(42)
+
+    with open(path, "r", newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            name = row.get("name", "").strip()
+            country_str = row.get("country", "").strip().lower()
+            position_str = row.get("position", "").strip().lower()
+
+            try:
+                price = float(row.get("star_value", 0))
+            except (ValueError, TypeError):
+                continue
+
+            if not name or price <= 0:
+                continue
+
+            country = country_map.get(country_str)
+            if country is None:
+                continue
+
+            # Validate position explicitly - skip invalid rows
+            if position_str == "forward":
+                position = Position.FORWARD
+            elif position_str == "back":
+                position = Position.BACK
+            else:
+                continue
+
+            # Generate unique ID with country prefix to avoid collisions
+            name_slug = name.lower().replace(" ", "-").replace(".", "")
+            base_id = f"{country.value.lower()}-{name_slug}"
+            player_id = base_id
+            if player_id in seen_ids:
+                suffix = 2
+                while f"{base_id}-{suffix}" in seen_ids:
+                    suffix += 1
+                player_id = f"{base_id}-{suffix}"
+            seen_ids.add(player_id)
+
+            # Generate mock ownership based on price (higher price = higher ownership)
+            base_ownership = (price / 16.0) * 30  # 16-star player ~= 30% ownership
+            ownership = min(max(base_ownership + rng.uniform(-10, 15), 1.0), 80.0)
+
+            players.append(
+                Player(
+                    id=player_id,
+                    name=name,
+                    country=country,
+                    position=position,
+                    star_value=price,
+                    ownership_pct=round(ownership, 1),
+                )
+            )
+
+    return players
+
+
+def generate_mock_player_points(
+    players: list[Player],
+    seed: Optional[int] = None,
+) -> dict[str, float]:
+    """
+    Generate realistic mock points for players.
+
+    Points are based on star value with position-based variance
+    to create differentiated recommendations.
+
+    Args:
+        players: List of Player objects.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Dictionary mapping player_id to expected points.
+    """
+    # Use local RNG to avoid global state mutation
+    rng = random.Random(seed)
+
+    points: dict[str, float] = {}
+
+    for player in players:
+        # Base points correlate with star value
+        base = player.star_value * 2.5
+
+        # Add position-based variance
+        if player.position == Position.FORWARD:
+            # Forwards have higher floor but lower ceiling
+            variance = rng.uniform(-3, 8)
+        else:
+            # Backs have more variance (boom/bust)
+            variance = rng.uniform(-5, 15)
+
+        # Premium players (high price) tend to score more consistently
+        consistency_bonus = (player.star_value - 10) * 0.5 if player.star_value > 10 else 0
+
+        total = max(base + variance + consistency_bonus, 5.0)
+        points[player.id] = round(total, 1)
+
+    return points
 
 
 def generate_prices_template(players: list[Player], csv_path: Optional[Path] = None) -> Path:

@@ -41,10 +41,15 @@ env/
 .DS_Store
 Thumbs.db
 
-# Data files (keep structure, ignore large files)
+# Data files (keep structure, ignore local data)
 data/*.db
 data/*.json
+data/*.csv
+data/cache/
 !data/.gitkeep
+
+# Local scripts
+scripts/
 
 # Environment variables
 .env
